@@ -4,6 +4,12 @@
 .env.*.local
 !.env.example
 
+# Local test fixtures (audio samples, etc.)
+*.m4a
+*.mp3
+*.wav
+*.mp4
+
 # Python
 __pycache__/
 *.py[cod]

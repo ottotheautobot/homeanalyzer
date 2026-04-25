@@ -1,8 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { signOut } from "@/app/actions/auth";
 
 export default async function Home() {
   const supabase = await createSupabaseServerClient();
@@ -10,34 +10,20 @@ export default async function Home() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (user) redirect("/tours");
+
   return (
     <main className="flex flex-1 flex-col items-center justify-center p-8">
       <div className="w-full max-w-md space-y-6 text-center">
         <h1 className="text-3xl font-semibold tracking-tight">
           House Tour Notes
         </h1>
-
-        {user ? (
-          <>
-            <p className="text-zinc-600 dark:text-zinc-400">
-              Signed in as <span className="font-medium">{user.email}</span>
-            </p>
-            <form action={signOut}>
-              <Button type="submit" variant="outline">
-                Sign out
-              </Button>
-            </form>
-          </>
-        ) : (
-          <>
-            <p className="text-zinc-600 dark:text-zinc-400">
-              Sign in to start a tour.
-            </p>
-            <Link href="/login" className={buttonVariants()}>
-              Sign in
-            </Link>
-          </>
-        )}
+        <p className="text-zinc-600 dark:text-zinc-400">
+          Sign in to start a tour.
+        </p>
+        <Link href="/login" className={buttonVariants()}>
+          Sign in
+        </Link>
       </div>
     </main>
   );
