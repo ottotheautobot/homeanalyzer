@@ -38,7 +38,7 @@ export function UploadAudio({ houseId }: { houseId: string }) {
         <input
           ref={fileRef}
           type="file"
-          accept="audio/*"
+          accept="audio/*,video/mp4,.m4a,.mp3,.wav,.aac,.caf,.mp4"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
