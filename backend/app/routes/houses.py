@@ -97,6 +97,30 @@ def create_house(
     return HouseOut(**res.data[0])
 
 
+@router.get("/houses", response_model=list[HouseOut])
+def list_all_houses(
+    user: AuthUser = Depends(current_user),
+    status_eq: str | None = None,
+) -> list[HouseOut]:
+    """List every house across every tour the user participates in.
+    Optional ?status_eq= filter (e.g. "completed") to narrow down."""
+    sb = supabase()
+    tp = (
+        sb.table("tour_participants")
+        .select("tour_id")
+        .eq("user_id", user.id)
+        .execute()
+    )
+    tour_ids = [r["tour_id"] for r in (tp.data or [])]
+    if not tour_ids:
+        return []
+    q = sb.table("houses").select("*").in_("tour_id", tour_ids)
+    if status_eq:
+        q = q.eq("status", status_eq)
+    res = q.order("scheduled_at", desc=False).execute()
+    return [HouseOut(**h) for h in res.data or []]
+
+
 @router.get("/tours/{tour_id}/houses", response_model=list[HouseOut])
 def list_houses(
     tour_id: str, user: AuthUser = Depends(current_user)

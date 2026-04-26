@@ -12,6 +12,7 @@ Items deliberately deferred from v1 build. Revisit after Florida trip if the pro
 
 ## Product / features
 
+- **Video capture, storage, and vision analysis.** Bot captures video already (mp4 archived to Supabase Storage on bot.completed). Use Claude vision on extracted frames to surface visual observations the audio misses (cabinet quality, paint condition, window views, hazards visible but not commented on). Storage pricing and frame-extraction strategy TBD.
 - **Photo capture in-app with Claude Vision analysis.** During or after tour, snap photos of specific concerns; vision model auto-tags and appends to observations. Increases data richness for comparison.
 - **Auto-import listing data from Zillow/Redfin URLs.** User pastes a listing link; backend scrapes/fetches address, price, sqft, photos, amenities. Reduces manual data entry.
 - **Per-tour shareable read-only "tour report" link.** Send to family, lender, or lawyer with a token-protected URL. No login required. Useful for buyer family decisions.
