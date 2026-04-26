@@ -9,6 +9,7 @@ page, which calls the accept endpoint here.
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
@@ -91,7 +92,16 @@ def create_invite(
     )
     invite = invite_res.data[0]
 
-    redirect_to = f"{settings.frontend_url.rstrip('/')}/invite/{token}"
+    # Route through /auth/callback so Supabase's PKCE code exchange happens
+    # first (sets the session cookie), then /auth/callback redirects to the
+    # `next` param which actually accepts the invite. Going directly to
+    # /invite/{token} skips the code exchange — the page renders with no
+    # auth cookie and accept fails silently.
+    next_path = f"/invite/{token}"
+    redirect_to = (
+        f"{settings.frontend_url.rstrip('/')}/auth/callback"
+        f"?next={quote(next_path, safe='/')}"
+    )
     try:
         sb.auth.admin.invite_user_by_email(
             body.email, {"redirect_to": redirect_to}
