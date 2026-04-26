@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LiveRefresh } from "@/components/live-refresh";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation } from "@/lib/types";
@@ -46,6 +47,11 @@ export default async function HousePage({
 
   return (
     <div className="space-y-8">
+      <LiveRefresh
+        channel={`house:${house.id}`}
+        table="houses"
+        filter={`id=eq.${house.id}`}
+      />
       <div>
         <Link
           href={`/tours/${tourId}`}

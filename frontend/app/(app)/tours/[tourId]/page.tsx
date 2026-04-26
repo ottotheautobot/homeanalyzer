@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LiveRefresh } from "@/components/live-refresh";
 import {
   Card,
   CardContent,
@@ -40,6 +41,11 @@ export default async function TourPage({
 
   return (
     <div className="space-y-8">
+      <LiveRefresh
+        channel={`tour-houses:${tour.id}`}
+        table="houses"
+        filter={`tour_id=eq.${tour.id}`}
+      />
       <div>
         <Link
           href="/tours"
