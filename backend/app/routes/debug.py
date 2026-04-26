@@ -10,6 +10,42 @@ from app.deps import AuthUser, current_user
 router = APIRouter(prefix="/debug", tags=["debug"])
 
 
+@router.get("/streaming-url")
+async def debug_streaming_url(_: AuthUser = Depends(current_user)) -> dict:
+    """Show the streaming URL we'd build for the latest house (without secrets).
+
+    Helps verify BACKEND_URL is what we think and that the wss:// rewrite
+    is correct.
+    """
+    from app.realtime import tokens
+
+    sb = supabase()
+    h = (
+        sb.table("houses")
+        .select("id, address")
+        .order("tour_started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not h.data:
+        return {"error": "no houses"}
+    house_id = h.data[0]["id"]
+    token = tokens.sign(house_id)
+
+    base = settings.backend_url.rstrip("/")
+    if base.startswith("https://"):
+        ws_base = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        ws_base = "ws://" + base[len("http://"):]
+    else:
+        ws_base = base
+    return {
+        "backend_url": base,
+        "ws_base": ws_base,
+        "example_streaming_url": f"{ws_base}/streams/audio/{house_id}?token={token[:8]}...",
+    }
+
+
 @router.get("/bot")
 async def debug_bot(_: AuthUser = Depends(current_user)) -> dict:
     """Look up the latest bot we created and ask MB for its current state."""
@@ -40,7 +76,7 @@ async def debug_bot(_: AuthUser = Depends(current_user)) -> dict:
                     f"https://api.meetingbaas.com{path}", headers=headers
                 )
                 out["probes"].append(
-                    {"path": path, "status": r.status_code, "body": r.text[:600]}
+                    {"path": path, "status": r.status_code, "body": r.text[:4000]}
                 )
             except Exception as e:
                 out["probes"].append({"path": path, "error": repr(e)})
