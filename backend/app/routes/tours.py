@@ -1,12 +1,15 @@
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import sentry_sdk
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
 
 router = APIRouter(prefix="/tours", tags=["tours"])
+log = logging.getLogger(__name__)
 
 
 class TourCreate(BaseModel):
@@ -92,3 +95,32 @@ def list_tours(user: AuthUser = Depends(current_user)) -> list[TourOut]:
 @router.get("/{tour_id}", response_model=TourOut)
 def get_tour(tour_id: str, user: AuthUser = Depends(current_user)) -> TourOut:
     return TourOut(**_get_tour_for_user(tour_id, user.id))
+
+
+@router.delete("/{tour_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_tour(tour_id: str, user: AuthUser = Depends(current_user)) -> Response:
+    """Delete a tour and ALL associated data: houses, observations, transcripts,
+    participants, invites (cascaded by FK), plus the audio/video files in
+    storage under each house's prefix (NOT cascaded by Postgres).
+    """
+    tour = _get_tour_for_user(tour_id, user.id)
+    if tour["owner_user_id"] != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the tour owner can delete"
+        )
+
+    sb = supabase()
+    houses = sb.table("houses").select("id").eq("tour_id", tour_id).execute()
+    for h in houses.data or []:
+        prefix = h["id"]
+        try:
+            files = sb.storage.from_("tour-audio").list(prefix) or []
+            paths = [f"{prefix}/{f['name']}" for f in files if f.get("name")]
+            if paths:
+                sb.storage.from_("tour-audio").remove(paths)
+        except Exception as e:
+            log.exception("storage cleanup failed for house %s", h["id"])
+            sentry_sdk.capture_exception(e)
+
+    sb.table("tours").delete().eq("id", tour_id).execute()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
