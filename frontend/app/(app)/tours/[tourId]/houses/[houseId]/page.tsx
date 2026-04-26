@@ -152,7 +152,9 @@ export default async function HousePage({
         </Card>
       ) : null}
 
-      {house.status === "completed" && (house.video_url || house.audio_url) ? (
+      {house.status === "completed" &&
+      ((house.video_url && (house.video_duration_seconds ?? 0) >= 30) ||
+        (!house.video_url && house.audio_url)) ? (
         <section className="space-y-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">
             Recording

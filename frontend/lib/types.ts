@@ -61,6 +61,7 @@ export type House = {
   tour_started_at: string | null;
   audio_url: string | null;
   video_url: string | null;
+  video_duration_seconds: number | null;
   synthesis_md: string | null;
 };
 

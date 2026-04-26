@@ -40,6 +40,7 @@ class HouseOut(BaseModel):
     tour_started_at: datetime | None
     audio_url: str | None
     video_url: str | None
+    video_duration_seconds: float | None
     synthesis_md: str | None
 
 

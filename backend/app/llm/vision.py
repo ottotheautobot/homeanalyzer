@@ -49,6 +49,44 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
+def probe_video_duration(mp4_bytes: bytes) -> float | None:
+    """Return the duration (seconds) of the video stream in an mp4. None on
+    failure. Used to gate UI playback — bots recording with camera off in
+    Zoom produce ~1s of video alongside long audio."""
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(mp4_bytes)
+        path = f.name
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if r.returncode != 0:
+            return None
+        out = r.stdout.decode("utf-8", "ignore").strip()
+        return float(out) if out else None
+    except Exception:
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+
+
 def _ffmpeg_extract_frames(
     mp4_bytes: bytes,
 ) -> list[tuple[float, bytes]]:

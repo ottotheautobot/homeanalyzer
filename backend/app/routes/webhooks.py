@@ -202,6 +202,17 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
         update["audio_url"] = audio_path
     if video_path:
         update["video_url"] = video_path
+    if video_bytes:
+        try:
+            from app.llm.vision import probe_video_duration
+
+            dur = probe_video_duration(video_bytes)
+            if dur is not None:
+                update["video_duration_seconds"] = dur
+                log.info("_finalize video duration bot=%s seconds=%.1f", bot_id, dur)
+        except Exception as e:
+            log.exception("video duration probe failed bot=%s", bot_id)
+            sentry_sdk.capture_exception(e)
     sb.table("houses").update(update).eq("id", house_id).execute()
 
     if not audio_bytes:
