@@ -114,11 +114,16 @@ export default async function HousePage({
         </Card>
       ) : null}
 
+      <section className="space-y-3">
+        <h2 className="text-lg font-medium">Observations</h2>
+        <ObservationFeed houseId={house.id} initial={observations} />
+      </section>
+
       {isLiveMultiParty ? (
         <section className="space-y-3">
           <h2 className="text-lg font-medium">Live transcript</h2>
           <p className="text-xs text-zinc-500">
-            Lines arrive as the bot hears them. Observations below populate
+            Lines arrive as the bot hears them. Observations above populate
             every ~20s.
           </p>
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 max-h-72 overflow-y-auto">
@@ -126,11 +131,6 @@ export default async function HousePage({
           </div>
         </section>
       ) : null}
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Observations</h2>
-        <ObservationFeed houseId={house.id} initial={observations} />
-      </section>
     </div>
   );
 }
