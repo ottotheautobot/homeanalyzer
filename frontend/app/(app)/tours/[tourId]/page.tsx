@@ -12,15 +12,9 @@ import { serverFetch } from "@/lib/api-server";
 import type { House, Tour, TourInvite } from "@/lib/types";
 
 import { InviteForm } from "./invite-form";
+import { InviteRow } from "./invite-row";
 import { NewHouseForm } from "./new-house-form";
 import { SwipeableHouseRow } from "./swipeable-house-row";
-
-const ROLE_LABEL: Record<string, string> = {
-  buyer: "Buyer",
-  partner: "Partner",
-  agent: "Agent",
-  friend_family: "Friend / family",
-};
 
 export default async function TourPage({
   params,
@@ -104,19 +98,7 @@ export default async function TourPage({
             {invites.length > 0 ? (
               <ul className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
                 {invites.map((inv) => (
-                  <li
-                    key={inv.id}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="font-medium">{inv.email}</span>
-                    <span className="text-xs text-zinc-500">
-                      {inv.role ? ROLE_LABEL[inv.role] ?? inv.role : "—"}
-                      {" · "}
-                      <span className="uppercase tracking-wide">
-                        {inv.accepted_at ? "joined" : "pending"}
-                      </span>
-                    </span>
-                  </li>
+                  <InviteRow key={inv.id} invite={inv} />
                 ))}
               </ul>
             ) : null}

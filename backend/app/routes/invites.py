@@ -142,6 +142,22 @@ def list_invites(
     return [InviteOut(**i) for i in res.data or []]
 
 
+@router.delete("/tours/{tour_id}/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invite(
+    tour_id: str,
+    invite_id: str,
+    user: AuthUser = Depends(current_user),
+):
+    _require_owner(tour_id, user.id)
+    sb = supabase()
+    sb.table("tour_invites").delete().eq("id", invite_id).eq(
+        "tour_id", tour_id
+    ).execute()
+    from fastapi import Response
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/invites/{token}/accept", response_model=AcceptResult)
 def accept_invite(
     token: str, user: AuthUser = Depends(current_user)
