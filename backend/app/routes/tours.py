@@ -43,6 +43,16 @@ def _get_tour_for_user(tour_id: str, user_id: str) -> dict:
 @router.post("", response_model=TourOut, status_code=status.HTTP_201_CREATED)
 def create_tour(payload: TourCreate, user: AuthUser = Depends(current_user)) -> TourOut:
     sb = supabase()
+    zoom = payload.zoom_pmr_url
+    if not zoom:
+        u = (
+            sb.table("users")
+            .select("default_zoom_url")
+            .eq("id", user.id)
+            .limit(1)
+            .execute()
+        )
+        zoom = (u.data[0] if u.data else {}).get("default_zoom_url")
     tour_res = (
         sb.table("tours")
         .insert(
@@ -50,7 +60,7 @@ def create_tour(payload: TourCreate, user: AuthUser = Depends(current_user)) -> 
                 "owner_user_id": user.id,
                 "name": payload.name,
                 "location": payload.location,
-                "zoom_pmr_url": payload.zoom_pmr_url,
+                "zoom_pmr_url": zoom,
             }
         )
         .execute()

@@ -58,8 +58,8 @@ async def start_tour(
         raise HTTPException(status.HTTP_409_CONFLICT, "Tour already started")
 
     zoom_url = body.zoom_url
+    sb = supabase()
     if not zoom_url:
-        sb = supabase()
         tour = (
             sb.table("tours")
             .select("zoom_pmr_url")
@@ -69,9 +69,18 @@ async def start_tour(
         )
         zoom_url = (tour.data[0] if tour.data else {}).get("zoom_pmr_url")
     if not zoom_url:
+        u = (
+            sb.table("users")
+            .select("default_zoom_url")
+            .eq("id", user.id)
+            .limit(1)
+            .execute()
+        )
+        zoom_url = (u.data[0] if u.data else {}).get("default_zoom_url")
+    if not zoom_url:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "No Zoom URL set on tour or supplied; pass zoom_url or set tours.zoom_pmr_url",
+            "No Zoom URL: pass zoom_url, set tours.zoom_pmr_url, or set users.default_zoom_url",
         )
 
     provider = get_meeting_provider()
