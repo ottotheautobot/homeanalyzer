@@ -142,9 +142,25 @@ async def stream_audio(
                     log.exception("deepgram recv loop crashed")
                     sentry_sdk.capture_exception(e)
 
+            async def keepalive_loop() -> None:
+                """Deepgram closes the connection after ~10s without any
+                audio or message. Send a KeepAlive every 5s so the bot can
+                spend its first seconds joining Zoom without losing the WS."""
+                try:
+                    while True:
+                        await asyncio.sleep(5)
+                        try:
+                            await dg_ws.send(json.dumps({"type": "KeepAlive"}))
+                        except Exception:
+                            return
+                except asyncio.CancelledError:
+                    return
+
             recv_task = asyncio.create_task(recv_loop())
+            keepalive_task = asyncio.create_task(keepalive_loop())
 
             try:
+                frames_forwarded = 0
                 while True:
                     msg = await websocket.receive()
                     if msg["type"] == "websocket.disconnect":
@@ -152,9 +168,17 @@ async def stream_audio(
                     data = msg.get("bytes")
                     if data:
                         await dg_ws.send(data)
+                        frames_forwarded += 1
+                        if frames_forwarded == 1:
+                            log.info(
+                                "first audio frame forwarded bot=%s bytes=%d",
+                                bot_id,
+                                len(data),
+                            )
             except WebSocketDisconnect:
                 pass
             finally:
+                keepalive_task.cancel()
                 try:
                     await dg_ws.send(json.dumps({"type": "CloseStream"}))
                 except Exception:
