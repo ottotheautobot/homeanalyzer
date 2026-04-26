@@ -1,5 +1,7 @@
-# Add ffmpeg to the Railway runtime so the vision pipeline can extract
-# scene-change frames from the bot's mp4.
+# Add ffmpeg to the Railway runtime for the vision pipeline (scene-change
+# frame extraction from the bot's mp4). Must include python312 explicitly:
+# defining [phases.setup] overrides nixpacks' auto-detected Python provider,
+# so omitting it breaks the install step with "python: command not found".
 
 [phases.setup]
-nixPkgs = ['ffmpeg']
+nixPkgs = ['python312', 'ffmpeg']
