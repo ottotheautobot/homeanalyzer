@@ -53,6 +53,28 @@ def _download_to_storage(url: str, house_id: str, suffix: str) -> str | None:
     return path
 
 
+def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
+    """Download audio + upload to storage. Returns (path, bytes) so the
+    caller can both archive and re-process without a second download."""
+    try:
+        with httpx.stream("GET", url, timeout=300.0, follow_redirects=True) as r:
+            r.raise_for_status()
+            content = b"".join(r.iter_bytes())
+    except Exception as e:
+        log.exception("audio download from %s failed", url[:80])
+        sentry_sdk.capture_exception(e)
+        return None, None
+
+    path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.wav"
+    sb = supabase()
+    sb.storage.from_("tour-audio").upload(
+        path=path,
+        file=content,
+        file_options={"content-type": "audio/wav", "upsert": "true"},
+    )
+    return path, content
+
+
 def _backfill_transcripts_from_url(
     transcript_url: str, house_id: str, bot_id: str
 ) -> int:
@@ -143,17 +165,13 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
     )
 
     audio_path = video_path = None
+    audio_bytes: bytes | None = None
     if completion.get("audio_url"):
-        audio_path = _download_to_storage(completion["audio_url"], house_id, "wav")
+        audio_path, audio_bytes = _download_audio(
+            completion["audio_url"], house_id
+        )
     if completion.get("video_url"):
         video_path = _download_to_storage(completion["video_url"], house_id, "mp4")
-
-    if completion.get("transcript_url"):
-        backfilled = _backfill_transcripts_from_url(
-            completion["transcript_url"], house_id, bot_id
-        )
-        if backfilled:
-            log.info("backfilled %d transcript rows for bot %s", backfilled, bot_id)
 
     update: dict = {"status": "synthesizing"}
     if audio_path:
@@ -162,45 +180,21 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
         update["video_url"] = video_path
     sb.table("houses").update(update).eq("id", house_id).execute()
 
-    transcripts = (
-        sb.table("transcripts")
-        .select("speaker, text, start_seconds, end_seconds")
-        .eq("bot_id", bot_id)
-        .order("start_seconds")
-        .execute()
-    )
-    observations = (
-        sb.table("observations")
-        .select("*")
-        .eq("house_id", house_id)
-        .order("created_at")
-        .execute()
-    )
-
-    if not transcripts.data:
-        sb.table("houses").update({"status": "completed"}).eq("id", house_id).execute()
+    if not audio_bytes:
+        log.warning("no audio bytes for bot %s, marking completed", bot_id)
+        sb.table("houses").update({"status": "completed"}).eq(
+            "id", house_id
+        ).execute()
         state.drop(bot_id)
         return
 
-    house_row = sb.table("houses").select("*").eq("id", house_id).limit(1).execute()
-    try:
-        synth = synthesize_house(
-            house_row.data[0], transcripts.data, observations.data or []
-        )
-    except Exception as e:
-        log.exception("synthesis failed for house %s", house_id)
-        sentry_sdk.capture_exception(e)
-        sb.table("houses").update({"status": "completed"}).eq("id", house_id).execute()
-        state.drop(bot_id)
-        return
+    # Reuse the Hours 3-8 pipeline: Whisper -> chunks -> extract -> synthesize.
+    # MB's bundled diarization-only transcript doesn't include text in many v1
+    # payloads, so we always run our own Whisper pass on the recording.
+    from app.routes.audio import _process_audio_upload
 
-    sb.table("houses").update(
-        {
-            "status": "completed",
-            "synthesis_md": synth["synthesis_md"],
-            "overall_score": synth["overall_score"],
-        }
-    ).eq("id", house_id).execute()
+    log.info("_finalize running whisper pipeline bot=%s", bot_id)
+    _process_audio_upload(house_id, audio_bytes, "audio/wav", "wav")
     state.drop(bot_id)
 
 
