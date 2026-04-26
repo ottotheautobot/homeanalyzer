@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import audio, houses, me, realtime, streams, tours, webhooks
+from app.routes import audio, debug, houses, me, realtime, streams, tours, webhooks
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -30,6 +30,7 @@ app.include_router(audio.router)
 app.include_router(realtime.router)
 app.include_router(webhooks.router)
 app.include_router(streams.router)
+app.include_router(debug.router)
 
 
 @app.get("/health")
