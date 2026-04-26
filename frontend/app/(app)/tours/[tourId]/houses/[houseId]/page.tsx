@@ -67,7 +67,7 @@ export default async function HousePage({
   const isLiveMultiParty = house.status === "touring" && !!house.bot_id;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <LiveRefresh
         channel={`house:${house.id}`}
         table="houses"
@@ -82,11 +82,13 @@ export default async function HousePage({
         </Link>
         <div className="mt-1 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-xl font-bold tracking-tight leading-tight">
               {house.address}
             </h1>
             {meta ? (
-              <p className="text-zinc-600 dark:text-zinc-400 mt-0.5">{meta}</p>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-0.5">
+                {meta}
+              </p>
             ) : null}
           </div>
           <div className="shrink-0 flex flex-col items-end gap-1.5">
@@ -149,14 +151,14 @@ export default async function HousePage({
         </Card>
       ) : null}
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Observations</h2>
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">Observations</h2>
         <ObservationFeed houseId={house.id} initial={observations} />
       </section>
 
       {isLiveMultiParty ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Live transcript</h2>
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">Live transcript</h2>
           <p className="text-xs text-zinc-500">
             Lines arrive as the bot hears them. Observations above populate
             every ~20s.

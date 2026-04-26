@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
+import { Mic, Play, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -48,31 +49,44 @@ export function StartTour({
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Start tour</Button>
+      <Button onClick={() => setOpen(true)} size="lg" className="w-full">
+        <Play className="size-4 mr-1.5" fill="currentColor" />
+        Start tour
+      </Button>
 
       <Modal open={open} onClose={close} title="How are you touring this house?">
         {mode === "picker" ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <button
               type="button"
               onClick={() => setMode("multi")}
-              className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+              className="w-full flex items-start gap-3 text-left rounded-lg border border-zinc-200 dark:border-zinc-800 p-3.5 hover:border-primary/50 hover:bg-primary/5 transition-colors"
             >
-              <div className="font-medium">Multi-party (Zoom + bot)</div>
-              <div className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                Bot joins your Zoom meeting. Observations stream live to anyone
-                watching from another device.
+              <span className="shrink-0 inline-flex items-center justify-center size-9 rounded-md bg-primary/10 text-primary">
+                <Users className="size-4.5" strokeWidth={2} />
+              </span>
+              <div className="min-w-0">
+                <div className="font-medium leading-tight">Multi-party</div>
+                <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-snug">
+                  Bot joins Zoom. Observations stream live to anyone watching
+                  remotely.
+                </div>
               </div>
             </button>
             <button
               type="button"
               onClick={() => setMode("solo")}
-              className="w-full text-left rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+              className="w-full flex items-start gap-3 text-left rounded-lg border border-zinc-200 dark:border-zinc-800 p-3.5 hover:border-primary/50 hover:bg-primary/5 transition-colors"
             >
-              <div className="font-medium">Solo (audio upload)</div>
-              <div className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                Record on your phone, upload after the tour. Observations and
-                synthesis appear once processing finishes.
+              <span className="shrink-0 inline-flex items-center justify-center size-9 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+                <Mic className="size-4.5" strokeWidth={2} />
+              </span>
+              <div className="min-w-0">
+                <div className="font-medium leading-tight">Solo</div>
+                <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-snug">
+                  Record on your phone, upload after. Brief generates once
+                  processing finishes.
+                </div>
               </div>
             </button>
           </div>

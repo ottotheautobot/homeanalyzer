@@ -1,3 +1,4 @@
+import { Plus } from "lucide-react";
 import Link from "next/link";
 
 import { buttonVariants } from "@/components/ui/button";
@@ -10,11 +11,12 @@ export default async function ToursPage() {
   const tours = await serverFetch<TourSummary[]>("/tours");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Tours</h1>
-        <Link href="/tours/new" className={buttonVariants()}>
-          New tour
+        <h1 className="text-xl font-semibold tracking-tight">Tours</h1>
+        <Link href="/tours/new" className={buttonVariants({ size: "sm" })}>
+          <Plus className="size-4" strokeWidth={2.5} />
+          <span className="ml-1">New tour</span>
         </Link>
       </div>
 
@@ -33,10 +35,10 @@ export default async function ToursPage() {
         </div>
       ) : (
         <>
-          <p className="text-xs text-zinc-500">
-            Swipe a tour left to delete it.
+          <p className="text-xs text-zinc-500 px-1">
+            Swipe a tour left to delete.
           </p>
-          <div className="grid gap-3">
+          <div className="grid gap-2">
             {tours.map((tour) => (
               <SwipeableTourRow key={tour.id} tour={tour} />
             ))}
