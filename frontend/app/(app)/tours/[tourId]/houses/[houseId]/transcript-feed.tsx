@@ -13,6 +13,8 @@ function formatTimestamp(seconds: number) {
 
 export function TranscriptFeed({ houseId }: { houseId: string }) {
   const [lines, setLines] = useState<Transcript[]>([]);
+  const [status, setStatus] = useState<string>("connecting");
+  const [eventCount, setEventCount] = useState(0);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -27,28 +29,41 @@ export function TranscriptFeed({ houseId }: { houseId: string }) {
           filter: `house_id=eq.${houseId}`,
         },
         (payload) => {
+          setEventCount((c) => c + 1);
           const t = payload.new as Transcript;
           setLines((prev) =>
             prev.some((p) => p.id === t.id) ? prev : [...prev.slice(-50), t],
           );
         },
       )
-      .subscribe();
+      .subscribe((s, err) => {
+        setStatus(err ? `${s} (${err.message ?? err})` : s);
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [houseId]);
 
+  const debug = (
+    <p className="text-xs text-zinc-400 mt-1">
+      sub: {status} · events: {eventCount}
+    </p>
+  );
+
   if (lines.length === 0) {
     return (
-      <p className="text-sm text-zinc-500">
-        Waiting for the bot to start hearing audio…
-      </p>
+      <div>
+        <p className="text-sm text-zinc-500">
+          Waiting for the bot to start hearing audio…
+        </p>
+        {debug}
+      </div>
     );
   }
 
   return (
+    <div>
     <ul className="space-y-1 text-sm">
       {lines.map((t) => (
         <li
@@ -67,5 +82,7 @@ export function TranscriptFeed({ houseId }: { houseId: string }) {
         </li>
       ))}
     </ul>
+    {debug}
+    </div>
   );
 }
