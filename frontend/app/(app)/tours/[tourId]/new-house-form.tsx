@@ -1,100 +1,359 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Camera, MapPin, Search } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
-import { createHouse } from "@/app/actions/houses";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { clientFetch } from "@/lib/api-client";
+import type { House } from "@/lib/types";
+
+type Form = {
+  address: string;
+  list_price: string;
+  sqft: string;
+  beds: string;
+  baths: string;
+  listing_url: string;
+  scheduled_at: string;
+};
+
+const emptyForm: Form = {
+  address: "",
+  list_price: "",
+  sqft: "",
+  beds: "",
+  baths: "",
+  listing_url: "",
+  scheduled_at: "",
+};
+
+function buildPayload(f: Form): Record<string, unknown> {
+  const out: Record<string, unknown> = { address: f.address.trim() };
+  const num = (s: string) => (s.trim() ? Number(s) : undefined);
+  if (num(f.list_price) !== undefined) out.list_price = num(f.list_price);
+  if (num(f.sqft) !== undefined) out.sqft = num(f.sqft);
+  if (num(f.beds) !== undefined) out.beds = num(f.beds);
+  if (num(f.baths) !== undefined) out.baths = num(f.baths);
+  if (f.listing_url.trim()) out.listing_url = f.listing_url.trim();
+  if (f.scheduled_at)
+    out.scheduled_at = new Date(f.scheduled_at).toISOString();
+  return out;
+}
+
+async function reverseGeocode(
+  lat: number,
+  lon: number,
+): Promise<string | null> {
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!r.ok) return null;
+    const data = (await r.json()) as {
+      address?: {
+        house_number?: string;
+        road?: string;
+        city?: string;
+        town?: string;
+        village?: string;
+        state?: string;
+        postcode?: string;
+      };
+    };
+    const a = data.address ?? {};
+    const street = [a.house_number, a.road].filter(Boolean).join(" ");
+    const city = a.city || a.town || a.village || "";
+    const parts = [street, city, a.state, a.postcode].filter(Boolean);
+    return parts.join(", ") || null;
+  } catch {
+    return null;
+  }
+}
 
 export function NewHouseForm({ tourId }: { tourId: string }) {
-  const action = createHouse.bind(null, tourId);
-  const [state, formAction, pending] = useActionState(action, {});
-  const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
+  const [form, setForm] = useState<Form>(emptyForm);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [geoStatus, setGeoStatus] = useState<string | null>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (state?.ok) formRef.current?.reset();
-  }, [state]);
+    if (!photo) {
+      setPhotoPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(photo);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
+
+  const create = useMutation({
+    mutationFn: async (): Promise<House> => {
+      const house = await clientFetch<House>(`/tours/${tourId}/houses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPayload(form)),
+      });
+      if (photo) {
+        const fd = new FormData();
+        fd.append("photo", photo, photo.name);
+        await clientFetch<House>(`/houses/${house.id}/photo`, {
+          method: "POST",
+          body: fd,
+        });
+      }
+      return house;
+    },
+    onSuccess: () => {
+      setForm(emptyForm);
+      setPhoto(null);
+      if (photoRef.current) photoRef.current.value = "";
+      router.refresh();
+    },
+  });
+
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setGeoStatus("Geolocation not supported by this browser");
+      return;
+    }
+    setGeoStatus("Locating…");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const addr = await reverseGeocode(
+          pos.coords.latitude,
+          pos.coords.longitude,
+        );
+        if (addr) {
+          setForm((f) => ({ ...f, address: addr }));
+          setGeoStatus(null);
+        } else {
+          setGeoStatus("Couldn't resolve an address from your location");
+        }
+      },
+      (err) => {
+        setGeoStatus(err.message || "Location request denied");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  }
+
+  function searchUrl(site: "zillow" | "redfin" | "google"): string {
+    const q = encodeURIComponent(form.address);
+    if (site === "zillow") return `https://www.zillow.com/homes/${q}_rb/`;
+    if (site === "redfin") return `https://www.redfin.com/stingray/do/location-autocomplete?location=${q}`;
+    return `https://www.google.com/search?q=${q}+for+sale`;
+  }
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-3">
+    <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2">
-          <Label htmlFor="address">Address</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="address">Address</Label>
+            <button
+              type="button"
+              onClick={useMyLocation}
+              className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
+            >
+              <MapPin className="size-3.5" />
+              Use my location
+            </button>
+          </div>
           <Input
             id="address"
-            name="address"
+            value={form.address}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, address: e.target.value }))
+            }
             placeholder="123 Sea Breeze Ln, Fort Lauderdale, FL"
             required
-            disabled={pending}
+            disabled={create.isPending}
           />
+          {geoStatus ? (
+            <p className="text-xs text-zinc-500">{geoStatus}</p>
+          ) : null}
+          {form.address.trim().length > 5 ? (
+            <div className="flex items-center gap-3 text-xs">
+              <span className="text-zinc-500 inline-flex items-center gap-1">
+                <Search className="size-3" />
+                Search:
+              </span>
+              <a
+                href={searchUrl("zillow")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Zillow
+              </a>
+              <a
+                href={searchUrl("redfin")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Redfin
+              </a>
+              <a
+                href={searchUrl("google")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Google
+              </a>
+            </div>
+          ) : null}
         </div>
+
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label>Curb appeal photo</Label>
+          <input
+            ref={photoRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
+          />
+          {photoPreview ? (
+            <div className="flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={photoPreview}
+                alt=""
+                className="size-20 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800"
+              />
+              <div className="flex flex-col gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => photoRef.current?.click()}
+                  disabled={create.isPending}
+                >
+                  Replace
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setPhoto(null);
+                    if (photoRef.current) photoRef.current.value = "";
+                  }}
+                  disabled={create.isPending}
+                >
+                  Remove
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => photoRef.current?.click()}
+              disabled={create.isPending}
+            >
+              <Camera className="size-4 mr-1.5" />
+              Take photo
+            </Button>
+          )}
+        </div>
+
         <div className="space-y-1.5">
           <Label htmlFor="list_price">List price</Label>
           <Input
             id="list_price"
-            name="list_price"
             inputMode="numeric"
             placeholder="850000"
-            disabled={pending}
+            value={form.list_price}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, list_price: e.target.value }))
+            }
+            disabled={create.isPending}
           />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="sqft">Sqft</Label>
           <Input
             id="sqft"
-            name="sqft"
             inputMode="numeric"
             placeholder="1850"
-            disabled={pending}
+            value={form.sqft}
+            onChange={(e) => setForm((f) => ({ ...f, sqft: e.target.value }))}
+            disabled={create.isPending}
           />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="beds">Beds</Label>
           <Input
             id="beds"
-            name="beds"
             inputMode="decimal"
             placeholder="3"
-            disabled={pending}
+            value={form.beds}
+            onChange={(e) => setForm((f) => ({ ...f, beds: e.target.value }))}
+            disabled={create.isPending}
           />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="baths">Baths</Label>
           <Input
             id="baths"
-            name="baths"
             inputMode="decimal"
             placeholder="2.5"
-            disabled={pending}
+            value={form.baths}
+            onChange={(e) => setForm((f) => ({ ...f, baths: e.target.value }))}
+            disabled={create.isPending}
           />
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="listing_url">Listing URL</Label>
           <Input
             id="listing_url"
-            name="listing_url"
             type="url"
             placeholder="https://www.zillow.com/..."
-            disabled={pending}
+            value={form.listing_url}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, listing_url: e.target.value }))
+            }
+            disabled={create.isPending}
           />
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="scheduled_at">Scheduled tour time</Label>
           <Input
             id="scheduled_at"
-            name="scheduled_at"
             type="datetime-local"
-            disabled={pending}
+            value={form.scheduled_at}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, scheduled_at: e.target.value }))
+            }
+            disabled={create.isPending}
           />
         </div>
       </div>
-      {state?.error ? (
-        <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>
+      {create.isError ? (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {create.error instanceof Error ? create.error.message : "Failed"}
+        </p>
       ) : null}
-      <Button type="submit" disabled={pending}>
-        {pending ? "Adding…" : "Add house"}
+      <Button
+        onClick={() => create.mutate()}
+        disabled={!form.address.trim() || create.isPending}
+        className="w-full"
+        size="lg"
+      >
+        {create.isPending ? "Adding…" : "Add house"}
       </Button>
-    </form>
+    </div>
   );
 }

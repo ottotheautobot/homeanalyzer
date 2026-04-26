@@ -82,15 +82,25 @@ export default async function HousePage({
           ← Tour
         </Link>
         <div className="mt-1 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold tracking-tight leading-tight">
-              {house.address}
-            </h1>
-            {meta ? (
-              <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-0.5">
-                {meta}
-              </p>
+          <div className="min-w-0 flex items-center gap-3">
+            {house.photo_signed_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={house.photo_signed_url}
+                alt=""
+                className="size-16 rounded-xl object-cover shrink-0 border border-zinc-200 dark:border-zinc-800"
+              />
             ) : null}
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold tracking-tight leading-tight">
+                {house.address}
+              </h1>
+              {meta ? (
+                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-0.5">
+                  {meta}
+                </p>
+              ) : null}
+            </div>
           </div>
           <div className="shrink-0 flex flex-col items-end gap-1.5">
             <span

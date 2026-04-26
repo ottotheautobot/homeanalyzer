@@ -110,10 +110,18 @@ export function SwipeableHouseRow({
           transition: dragging.current ? "none" : "transform 200ms",
         }}
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <div>
-            <div className="font-medium">{house.address}</div>
-            <div className="text-sm text-zinc-600 dark:text-zinc-400">
+        <div className="flex items-center gap-3">
+          {house.photo_signed_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={house.photo_signed_url}
+              alt=""
+              className="size-14 rounded-lg object-cover shrink-0 border border-zinc-200 dark:border-zinc-800"
+            />
+          ) : null}
+          <div className="min-w-0 flex-1">
+            <div className="font-medium truncate">{house.address}</div>
+            <div className="text-sm text-zinc-600 dark:text-zinc-400 truncate">
               {[
                 price,
                 house.beds != null ? `${house.beds} bd` : null,
@@ -127,7 +135,7 @@ export function SwipeableHouseRow({
             </div>
           </div>
           <span
-            className={`text-xs uppercase tracking-wide ${STATUS_TONE[house.status]}`}
+            className={`text-xs uppercase tracking-wide shrink-0 ${STATUS_TONE[house.status]}`}
           >
             {house.status}
             {house.overall_score != null

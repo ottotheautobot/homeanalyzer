@@ -1,8 +1,18 @@
 import logging
+import time
 from datetime import datetime
+from uuid import uuid4
 
 import sentry_sdk
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel
 
 from app.db.supabase import supabase
@@ -41,6 +51,8 @@ class HouseOut(BaseModel):
     audio_url: str | None
     video_url: str | None
     video_duration_seconds: float | None
+    photo_url: str | None
+    photo_signed_url: str | None = None
     synthesis_md: str | None
 
 
@@ -92,6 +104,22 @@ def get_house_for_user(house_id: str, user_id: str) -> dict:
     return house
 
 
+def _sign_photo(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        res = supabase().storage.from_("tour-audio").create_signed_url(path, 3600)
+        return res.get("signedURL") or res.get("signedUrl")
+    except Exception as e:
+        log.exception("photo sign failed for %s", path)
+        sentry_sdk.capture_exception(e)
+        return None
+
+
+def _to_house_out(row: dict) -> "HouseOut":
+    return HouseOut(**row, photo_signed_url=_sign_photo(row.get("photo_url")))
+
+
 @router.post(
     "/tours/{tour_id}/houses",
     response_model=HouseOut,
@@ -107,7 +135,7 @@ def create_house(
     data = payload.model_dump(mode="json", exclude_none=True)
     data["tour_id"] = tour_id
     res = sb.table("houses").insert(data).execute()
-    return HouseOut(**res.data[0])
+    return _to_house_out(res.data[0])
 
 
 @router.get("/houses", response_model=list[HouseOut])
@@ -131,7 +159,7 @@ def list_all_houses(
     if status_eq:
         q = q.eq("status", status_eq)
     res = q.order("scheduled_at", desc=False).execute()
-    return [HouseOut(**h) for h in res.data or []]
+    return [_to_house_out(h) for h in res.data or []]
 
 
 @router.get("/tours/{tour_id}/houses", response_model=list[HouseOut])
@@ -147,17 +175,18 @@ def list_houses(
         .order("scheduled_at", desc=False)
         .execute()
     )
-    return [HouseOut(**h) for h in res.data]
+    return [_to_house_out(h) for h in res.data]
 
 
 @router.get("/houses/{house_id}", response_model=HouseOut)
 def get_house(house_id: str, user: AuthUser = Depends(current_user)) -> HouseOut:
-    return HouseOut(**get_house_for_user(house_id, user.id))
+    return _to_house_out(get_house_for_user(house_id, user.id))
 
 
 class MediaUrls(BaseModel):
     audio_url: str | None
     video_url: str | None
+    photo_url: str | None
 
 
 @router.get("/houses/{house_id}/media", response_model=MediaUrls)
@@ -183,7 +212,44 @@ def get_media(
     return MediaUrls(
         audio_url=_sign(house.get("audio_url")),
         video_url=_sign(house.get("video_url")),
+        photo_url=_sign(house.get("photo_url")),
     )
+
+
+@router.post("/houses/{house_id}/photo", response_model=HouseOut)
+async def upload_house_photo(
+    house_id: str,
+    photo: UploadFile = File(...),
+    user: AuthUser = Depends(current_user),
+) -> HouseOut:
+    """Upload a curb appeal photo for the house. Stored under the same
+    {house_id}/ prefix as the recordings so existing per-house cleanup
+    captures it on delete."""
+    house = get_house_for_user(house_id, user.id)
+    photo_bytes = await photo.read()
+    if not photo_bytes:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty photo")
+
+    filename = photo.filename or "photo.jpg"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "heic", "webp"):
+        ext = "jpg"
+    mime = photo.content_type or "image/jpeg"
+    storage_path = f"{house['id']}/photo-{int(time.time())}-{uuid4().hex[:8]}.{ext}"
+
+    sb = supabase()
+    sb.storage.from_("tour-audio").upload(
+        path=storage_path,
+        file=photo_bytes,
+        file_options={"content-type": mime, "upsert": "true"},
+    )
+    res = (
+        sb.table("houses")
+        .update({"photo_url": storage_path})
+        .eq("id", house_id)
+        .execute()
+    )
+    return _to_house_out(res.data[0])
 
 
 @router.delete("/houses/{house_id}", status_code=status.HTTP_204_NO_CONTENT)

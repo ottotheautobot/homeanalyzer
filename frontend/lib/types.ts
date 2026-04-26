@@ -62,6 +62,8 @@ export type House = {
   audio_url: string | null;
   video_url: string | null;
   video_duration_seconds: number | null;
+  photo_url: string | null;
+  photo_signed_url: string | null;
   synthesis_md: string | null;
 };
 
