@@ -428,6 +428,7 @@ dependencies = [
     { name = "supabase" },
     { name = "svix" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -445,6 +446,7 @@ requires-dist = [
     { name = "supabase", specifier = ">=2.29.0" },
     { name = "svix", specifier = ">=1.92.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.46.0" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [[package]]

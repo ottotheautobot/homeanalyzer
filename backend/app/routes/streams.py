@@ -1,19 +1,23 @@
 """WebSocket endpoint Meeting BaaS dials with raw PCM16LE @ 16kHz mono.
 
-Bridges that stream into Deepgram's streaming STT, writes finals to the
-transcripts table, and nudges the realtime extractor.
+Bridges that stream into Deepgram's streaming STT (raw `websockets`,
+not the SDK — the SDK was returning generic 400s with no actionable
+error body). Writes finals to the transcripts table and nudges the
+realtime extractor.
 
-Failure mode: if Deepgram drops mid-tour, live observations stop until the
-user reconnects (rare). Post-meeting `bot.completed` still gives us the full
-transcript file via the same extraction path in webhooks.py as a backstop.
+Failure mode: if Deepgram drops mid-tour, live observations stop until
+the user reconnects (rare). Post-meeting `bot.completed` still gives us
+the full audio file via the same Whisper path in webhooks.py as a
+backstop.
 """
 
 import asyncio
+import json
 import logging
+import urllib.parse
 
 import sentry_sdk
-from deepgram import AsyncDeepgramClient
-from deepgram.listen.v1 import ListenV1Results
+import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import settings
@@ -25,19 +29,17 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["streams"])
 
-
-def _deepgram() -> AsyncDeepgramClient:
-    return AsyncDeepgramClient(api_key=settings.deepgram_api_key)
-
-
-def _extract_speaker(result: ListenV1Results) -> str | None:
-    if not result.channel.alternatives:
-        return None
-    words = result.channel.alternatives[0].words or []
-    if not words:
-        return None
-    spk = words[0].speaker
-    return f"Speaker {int(spk)}" if spk is not None else None
+DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
+DEEPGRAM_PARAMS = {
+    "model": "nova-2",
+    "encoding": "linear16",
+    "sample_rate": "16000",
+    "channels": "1",
+    "punctuate": "true",
+    "diarize": "true",
+    "interim_results": "false",
+    "endpointing": "300",
+}
 
 
 @router.websocket("/streams/audio/{house_id}")
@@ -76,14 +78,22 @@ async def stream_audio(
     state.get_or_create(bot_id, house_id)
     inserted_keys: set[float] = set()
 
-    async def handle_final(result: ListenV1Results) -> None:
-        if not result.channel.alternatives:
+    async def handle_final(payload: dict) -> None:
+        alts = (payload.get("channel") or {}).get("alternatives") or []
+        if not alts:
             return
-        text = (result.channel.alternatives[0].transcript or "").strip()
+        text = (alts[0].get("transcript") or "").strip()
         if not text:
             return
-        start = float(result.start)
-        end = start + float(result.duration)
+        start = float(payload.get("start", 0.0))
+        duration = float(payload.get("duration", 0.0))
+        end = start + duration
+
+        speaker = None
+        words = alts[0].get("words") or []
+        if words and words[0].get("speaker") is not None:
+            speaker = f"Speaker {int(words[0]['speaker'])}"
+
         key = round(start, 3)
         if key in inserted_keys:
             return
@@ -95,7 +105,7 @@ async def stream_audio(
                 {
                     "house_id": house_id,
                     "bot_id": bot_id,
-                    "speaker": _extract_speaker(result),
+                    "speaker": speaker,
                     "text": text,
                     "start_seconds": start,
                     "end_seconds": end,
@@ -103,27 +113,31 @@ async def stream_audio(
                 }
             ).execute()
         except Exception as e:
-            # Most likely UNIQUE(bot_id, start_seconds) on a duplicate emit.
             log.debug("transcript insert skipped: %s", e)
             return
 
         asyncio.create_task(maybe_extract(bot_id))
 
+    dg_url = DEEPGRAM_WS_URL + "?" + urllib.parse.urlencode(DEEPGRAM_PARAMS)
+    dg_headers = {"Authorization": f"Token {settings.deepgram_api_key}"}
+
     try:
-        async with _deepgram().listen.v1.connect(
-            model="nova-2",
-            encoding="linear16",
-            sample_rate=16000,
-            channels=1,
-            punctuate=True,
-            diarize=True,
+        async with websockets.connect(
+            dg_url, additional_headers=dg_headers, max_size=2**24
         ) as dg_ws:
+            log.info("deepgram WS connected for bot %s", bot_id)
 
             async def recv_loop() -> None:
                 try:
                     async for msg in dg_ws:
-                        if isinstance(msg, ListenV1Results) and msg.is_final:
-                            await handle_final(msg)
+                        if isinstance(msg, (bytes, bytearray)):
+                            continue
+                        try:
+                            payload = json.loads(msg)
+                        except Exception:
+                            continue
+                        if payload.get("type") == "Results" and payload.get("is_final"):
+                            await handle_final(payload)
                 except Exception as e:
                     log.exception("deepgram recv loop crashed")
                     sentry_sdk.capture_exception(e)
@@ -137,18 +151,25 @@ async def stream_audio(
                         break
                     data = msg.get("bytes")
                     if data:
-                        await dg_ws.send_media(data)
+                        await dg_ws.send(data)
             except WebSocketDisconnect:
                 pass
             finally:
                 try:
-                    await dg_ws.send_close_stream()
+                    await dg_ws.send(json.dumps({"type": "CloseStream"}))
                 except Exception:
                     pass
                 try:
                     await asyncio.wait_for(recv_task, timeout=5.0)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     recv_task.cancel()
+    except websockets.exceptions.InvalidStatus as e:
+        log.error(
+            "deepgram rejected WS upgrade: status=%s headers=%s",
+            e.response.status_code,
+            dict(e.response.headers),
+        )
+        sentry_sdk.capture_exception(e)
     except Exception as e:
         log.exception("stream handler crashed")
         sentry_sdk.capture_exception(e)
