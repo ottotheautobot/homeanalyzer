@@ -21,7 +21,7 @@ router = APIRouter(tags=["invites"])
 log = logging.getLogger(__name__)
 
 INVITE_TTL_DAYS = 14
-ALLOWED_ROLES = {"buyer", "partner", "agent"}
+ALLOWED_ROLES = {"buyer", "partner", "agent", "friend_family"}
 
 
 class InviteCreate(BaseModel):

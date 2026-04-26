@@ -15,6 +15,13 @@ import { InviteForm } from "./invite-form";
 import { NewHouseForm } from "./new-house-form";
 import { SwipeableHouseRow } from "./swipeable-house-row";
 
+const ROLE_LABEL: Record<string, string> = {
+  buyer: "Buyer",
+  partner: "Partner",
+  agent: "Agent",
+  friend_family: "Friend / family",
+};
+
 export default async function TourPage({
   params,
 }: {
@@ -102,10 +109,12 @@ export default async function TourPage({
                     className="flex items-center justify-between text-sm"
                   >
                     <span className="font-medium">{inv.email}</span>
-                    <span className="text-xs uppercase tracking-wide text-zinc-500">
-                      {inv.role ?? "—"}
+                    <span className="text-xs text-zinc-500">
+                      {inv.role ? ROLE_LABEL[inv.role] ?? inv.role : "—"}
                       {" · "}
-                      {inv.accepted_at ? "joined" : "pending"}
+                      <span className="uppercase tracking-wide">
+                        {inv.accepted_at ? "joined" : "pending"}
+                      </span>
                     </span>
                   </li>
                 ))}

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clientFetch } from "@/lib/api-client";
 
-type Role = "partner" | "agent" | "buyer";
+type Role = "partner" | "agent" | "buyer" | "friend_family";
 
 export function InviteForm({ tourId }: { tourId: string }) {
   const router = useRouter();
@@ -53,6 +53,7 @@ export function InviteForm({ tourId }: { tourId: string }) {
             disabled={send.isPending}
           >
             <option value="partner">Partner</option>
+            <option value="friend_family">Friend / family</option>
             <option value="agent">Agent</option>
             <option value="buyer">Buyer</option>
           </select>
