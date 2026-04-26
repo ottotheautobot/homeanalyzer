@@ -37,14 +37,22 @@ class MeetingBaasProvider(MeetingProvider):
             "automatic_leave": {
                 "waiting_room_timeout": 90,
                 "noone_joined_timeout": 90,
+                # Floor per v1 docs is ~300s. Default 600s = up to 10 min of
+                # billed silence at the tail of every tour if we don't end
+                # cleanly. 300s caps that worst case.
+                "silence_timeout": 300,
             },
             "webhook_url": webhook_url,
         }
         if settings.meetingbaas_enable_streaming:
+            # MB v1 docs are ambiguous on direction; reference impl
+            # (Meeting-BaaS/realtime-meeting-transcription) uses
+            # `streaming.output` to receive meeting audio, not `streaming.input`.
+            # Our previous .input config produced 0 frames — try .output.
             body["streaming"] = {
                 "audio_frequency": "16khz",
-                "input": streaming_input_url,
-                "output": None,
+                "input": None,
+                "output": streaming_input_url,
             }
         if settings.zoom_sdk_id and settings.zoom_sdk_secret:
             body["zoom_sdk_id"] = settings.zoom_sdk_id
