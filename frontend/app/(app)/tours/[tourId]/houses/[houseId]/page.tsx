@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LiveRefresh } from "@/components/live-refresh";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
-import type { House, Observation, Tour } from "@/lib/types";
+import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
@@ -33,10 +33,13 @@ export default async function HousePage({
   params: Promise<{ tourId: string; houseId: string }>;
 }) {
   const { tourId, houseId } = await params;
-  const [house, observations, tour] = await Promise.all([
+  const [house, observations, tour, transcripts] = await Promise.all([
     serverFetch<House>(`/houses/${houseId}`),
     serverFetch<Observation[]>(`/houses/${houseId}/observations`),
     serverFetch<Tour>(`/tours/${tourId}`),
+    serverFetch<Transcript[]>(`/houses/${houseId}/transcripts`).catch(
+      () => [] as Transcript[],
+    ),
   ]);
 
   const price = formatPrice(house.list_price);
@@ -127,7 +130,7 @@ export default async function HousePage({
             every ~20s.
           </p>
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 max-h-72 overflow-y-auto">
-            <TranscriptFeed houseId={house.id} />
+            <TranscriptFeed houseId={house.id} initial={transcripts} />
           </div>
         </section>
       ) : null}

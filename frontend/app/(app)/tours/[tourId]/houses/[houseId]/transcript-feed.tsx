@@ -11,8 +11,14 @@ function formatTimestamp(seconds: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function TranscriptFeed({ houseId }: { houseId: string }) {
-  const [lines, setLines] = useState<Transcript[]>([]);
+export function TranscriptFeed({
+  houseId,
+  initial,
+}: {
+  houseId: string;
+  initial: Transcript[];
+}) {
+  const [lines, setLines] = useState<Transcript[]>(initial);
   const [status, setStatus] = useState<string>("connecting");
   const [eventCount, setEventCount] = useState(0);
 

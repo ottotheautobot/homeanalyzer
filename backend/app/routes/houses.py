@@ -42,6 +42,17 @@ class HouseOut(BaseModel):
     synthesis_md: str | None
 
 
+class TranscriptOut(BaseModel):
+    id: str
+    house_id: str
+    bot_id: str
+    speaker: str | None
+    text: str
+    start_seconds: float
+    end_seconds: float | None
+    processed: bool
+
+
 class ObservationOut(BaseModel):
     id: str
     house_id: str
@@ -172,6 +183,24 @@ async def delete_house(
 
     sb.table("houses").delete().eq("id", house_id).execute()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/houses/{house_id}/transcripts", response_model=list[TranscriptOut]
+)
+def list_transcripts(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> list[TranscriptOut]:
+    get_house_for_user(house_id, user.id)
+    sb = supabase()
+    res = (
+        sb.table("transcripts")
+        .select("*")
+        .eq("house_id", house_id)
+        .order("start_seconds", desc=False)
+        .execute()
+    )
+    return [TranscriptOut(**t) for t in res.data]
 
 
 @router.get(
