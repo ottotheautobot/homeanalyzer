@@ -44,7 +44,15 @@ def _extract_speaker(result: ListenV1Results) -> str | None:
 async def stream_audio(
     websocket: WebSocket, house_id: str, token: str
 ) -> None:
+    log.info(
+        "stream dial received house=%s client=%s headers=%s",
+        house_id,
+        websocket.client,
+        {k.lower(): v for k, v in websocket.headers.items() if k.lower() not in ("authorization", "cookie")},
+    )
+
     if not tokens.verify(house_id, token):
+        log.warning("stream dial rejected: bad token house=%s", house_id)
         await websocket.close(code=1008, reason="bad token")
         return
 
@@ -58,11 +66,12 @@ async def stream_audio(
     )
     bot_id = (house.data[0] if house.data else {}).get("bot_id")
     if not bot_id:
+        log.warning("stream dial rejected: no bot_id on house %s", house_id)
         await websocket.close(code=1011, reason="house has no active bot")
         return
 
     await websocket.accept()
-    log.info("stream open bot=%s house=%s", bot_id, house_id)
+    log.info("stream accepted bot=%s house=%s", bot_id, house_id)
 
     state.get_or_create(bot_id, house_id)
     inserted_keys: set[float] = set()
