@@ -32,14 +32,20 @@ class MeetingBaasProvider(MeetingProvider):
             "reserved": False,
             "recording_mode": "speaker_view",
             "speech_to_text": None,
-            "automatic_leave": {"waiting_room_timeout": 600, "noone_joined_timeout": 600},
-            "streaming": {
-                "audio_frequency": "16khz",
-                "input": streaming_input_url,
-                "output": None,
+            # Tight timeouts — bots that can't get admitted within 90s should
+            # exit, not idle for 10 minutes burning tokens.
+            "automatic_leave": {
+                "waiting_room_timeout": 90,
+                "noone_joined_timeout": 90,
             },
             "webhook_url": webhook_url,
         }
+        if settings.meetingbaas_enable_streaming:
+            body["streaming"] = {
+                "audio_frequency": "16khz",
+                "input": streaming_input_url,
+                "output": None,
+            }
         if settings.zoom_sdk_id and settings.zoom_sdk_secret:
             body["zoom_sdk_id"] = settings.zoom_sdk_id
             body["zoom_sdk_pwd"] = settings.zoom_sdk_secret

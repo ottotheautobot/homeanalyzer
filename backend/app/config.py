@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     zoom_sdk_secret: str = ""
 
     deepgram_api_key: str = ""
+    # Set true once MB confirms streaming.input works for our account. Until
+    # then it costs tokens for nothing — MB establishes the WS but never
+    # sends audio frames (verified with frame counters in streams.py).
+    meetingbaas_enable_streaming: bool = False
 
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.
