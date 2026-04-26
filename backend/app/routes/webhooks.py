@@ -75,6 +75,27 @@ def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
     return path, content
 
 
+def _download_video(url: str, house_id: str) -> tuple[str | None, bytes | None]:
+    """Download video + upload to storage. Returns (path, bytes)."""
+    try:
+        with httpx.stream("GET", url, timeout=600.0, follow_redirects=True) as r:
+            r.raise_for_status()
+            content = b"".join(r.iter_bytes())
+    except Exception as e:
+        log.exception("video download from %s failed", url[:80])
+        sentry_sdk.capture_exception(e)
+        return None, None
+
+    path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.mp4"
+    sb = supabase()
+    sb.storage.from_("tour-audio").upload(
+        path=path,
+        file=content,
+        file_options={"content-type": "video/mp4", "upsert": "true"},
+    )
+    return path, content
+
+
 def _backfill_transcripts_from_url(
     transcript_url: str, house_id: str, bot_id: str
 ) -> int:
@@ -166,12 +187,15 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
 
     audio_path = video_path = None
     audio_bytes: bytes | None = None
+    video_bytes: bytes | None = None
     if completion.get("audio_url"):
         audio_path, audio_bytes = _download_audio(
             completion["audio_url"], house_id
         )
     if completion.get("video_url"):
-        video_path = _download_to_storage(completion["video_url"], house_id, "mp4")
+        video_path, video_bytes = _download_video(
+            completion["video_url"], house_id
+        )
 
     update: dict = {"status": "synthesizing"}
     if audio_path:
@@ -188,9 +212,38 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
         state.drop(bot_id)
         return
 
+    # Vision pass on the video first (if available) so the visual observations
+    # land before synthesis runs and Sonnet can fold them into the brief.
+    if video_bytes:
+        try:
+            from app.llm.vision import analyze_video
+
+            log.info("_finalize running vision bot=%s video_bytes=%d", bot_id, len(video_bytes))
+            visual_obs = analyze_video(video_bytes)
+            if visual_obs:
+                rows = [
+                    {
+                        "house_id": house_id,
+                        "user_id": None,
+                        "room": o.get("room"),
+                        "category": o["category"],
+                        "content": o["content"],
+                        "severity": o.get("severity"),
+                        "source": "photo_analysis",
+                        "recall_timestamp": o.get("recall_timestamp"),
+                    }
+                    for o in visual_obs
+                ]
+                sb.table("observations").insert(rows).execute()
+                log.info("_finalize wrote %d visual observations bot=%s", len(rows), bot_id)
+        except Exception as e:
+            log.exception("vision pipeline crashed bot=%s", bot_id)
+            sentry_sdk.capture_exception(e)
+
     # Reuse the Hours 3-8 pipeline: Whisper -> chunks -> extract -> synthesize.
     # MB's bundled diarization-only transcript doesn't include text in many v1
     # payloads, so we always run our own Whisper pass on the recording.
+    # Synthesis at the end picks up both audio + photo_analysis observations.
     from app.routes.audio import _process_audio_upload
 
     log.info("_finalize running whisper pipeline bot=%s", bot_id)

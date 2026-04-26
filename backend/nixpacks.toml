@@ -1,0 +1,5 @@
+# Add ffmpeg to the Railway runtime so the vision pipeline can extract
+# scene-change frames from the bot's mp4.
+
+[phases.setup]
+nixPkgs = ['ffmpeg']
