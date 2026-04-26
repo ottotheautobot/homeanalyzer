@@ -24,6 +24,17 @@ export type TourInvite = {
   accepted_at: string | null;
 };
 
+export type Transcript = {
+  id: string;
+  house_id: string;
+  bot_id: string;
+  speaker: string | null;
+  text: string;
+  start_seconds: number;
+  end_seconds: number | null;
+  processed: boolean;
+};
+
 export type House = {
   id: string;
   tour_id: string;

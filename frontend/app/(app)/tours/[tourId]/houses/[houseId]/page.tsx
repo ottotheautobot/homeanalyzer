@@ -9,6 +9,7 @@ import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
+import { TranscriptFeed } from "./transcript-feed";
 
 const STATUS_LABEL: Record<House["status"], string> = {
   upcoming: "Not yet toured",
@@ -111,6 +112,19 @@ export default async function HousePage({
             <Synthesis markdown={house.synthesis_md} />
           </CardContent>
         </Card>
+      ) : null}
+
+      {isLiveMultiParty ? (
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Live transcript</h2>
+          <p className="text-xs text-zinc-500">
+            Lines arrive as the bot hears them. Observations below populate
+            every ~20s.
+          </p>
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 max-h-72 overflow-y-auto">
+            <TranscriptFeed houseId={house.id} />
+          </div>
+        </section>
       ) : null}
 
       <section className="space-y-3">

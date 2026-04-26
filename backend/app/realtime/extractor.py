@@ -17,11 +17,15 @@ from app.realtime import state
 
 log = logging.getLogger(__name__)
 
-EXTRACTION_WINDOW_SECONDS = 60.0
+# Trigger extraction every 20s OR when 5+ unprocessed transcripts have piled
+# up — whichever comes first. Brief locked 60s; reduced for live UX so the
+# observation feed feels responsive rather than batched.
+EXTRACTION_WINDOW_SECONDS = 20.0
+EXTRACTION_TRANSCRIPT_THRESHOLD = 5
 
 
 async def maybe_extract(bot_id: str, force: bool = False) -> int:
-    """Run extraction if 60s have elapsed since the last run, or if forced.
+    """Run extraction if window elapsed, threshold reached, or forced.
 
     Returns the number of new observations written.
     """
@@ -29,8 +33,23 @@ async def maybe_extract(bot_id: str, force: bool = False) -> int:
     if s is None:
         return 0
     now = time.monotonic()
-    if not force and (now - s.last_extraction_at) < EXTRACTION_WINDOW_SECONDS:
-        return 0
+    elapsed = now - s.last_extraction_at
+    if not force and elapsed < EXTRACTION_WINDOW_SECONDS:
+        # Allow earlier trigger if enough transcripts have piled up.
+        from app.db.supabase import supabase as _sb
+
+        count = (
+            _sb()
+            .table("transcripts")
+            .select("id", count="exact")
+            .eq("bot_id", bot_id)
+            .eq("processed", False)
+            .execute()
+            .count
+            or 0
+        )
+        if count < EXTRACTION_TRANSCRIPT_THRESHOLD:
+            return 0
 
     if s.extraction_lock.locked():
         return 0
