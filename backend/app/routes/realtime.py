@@ -9,12 +9,13 @@ the sticky room hint and forces an immediate extraction pass.
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import settings
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
+from app.notifications import send_tour_started_email
 from app.providers.meetingbaas import get_meeting_provider
 from app.realtime import state, tokens
 from app.realtime.extractor import maybe_extract
@@ -51,6 +52,7 @@ def _backend_ws_base() -> str:
 async def start_tour(
     house_id: str,
     body: StartTourBody,
+    background: BackgroundTasks,
     user: AuthUser = Depends(current_user),
 ) -> HouseOut:
     house = get_house_for_user(house_id, user.id)
@@ -121,6 +123,25 @@ async def start_tour(
         .execute()
     )
     state.get_or_create(bot_id, house_id)
+
+    tour_row = (
+        sb.table("tours")
+        .select("name")
+        .eq("id", house["tour_id"])
+        .limit(1)
+        .execute()
+    )
+    tour_name = (tour_row.data[0] if tour_row.data else {}).get("name", "")
+    background.add_task(
+        send_tour_started_email,
+        tour_id=house["tour_id"],
+        tour_name=tour_name,
+        owner_user_id=user.id,
+        house_id=house_id,
+        house_address=house["address"],
+        zoom_url=zoom_url,
+    )
+
     return HouseOut(**res.data[0])
 
 

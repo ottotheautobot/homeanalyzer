@@ -32,6 +32,11 @@ class Settings(BaseSettings):
 
     deepgram_api_key: str = ""
 
+    # Resend transactional email — used to notify tour participants when a
+    # tour starts on a house. Skipped silently if not set.
+    resend_api_key: str = ""
+    resend_from_email: str = "Tour Notes <onboarding@resend.dev>"
+
     # Public base URL for this backend, used to build webhook + streaming URLs
     # we hand to Meeting BaaS. Set in Railway env to the Railway-issued URL.
     backend_url: str = "http://localhost:8000"
