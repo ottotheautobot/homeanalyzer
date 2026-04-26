@@ -10,6 +10,70 @@ from app.deps import AuthUser, current_user
 router = APIRouter(prefix="/debug", tags=["debug"])
 
 
+@router.post("/finalize/{bot_id}")
+async def debug_finalize(
+    bot_id: str, _: AuthUser = Depends(current_user)
+) -> dict:
+    """Manually run the post-meeting pipeline for a bot, bypassing the
+    webhook. Downloads the audio from MB's S3 (4h TTL) and runs it through
+    our Whisper -> Haiku -> Sonnet pipeline. Use when MB's webhook isn't
+    reaching us / signature verify is misconfigured.
+    """
+    import time
+    from uuid import uuid4
+
+    from app.routes.audio import _process_audio_upload
+
+    sb = supabase()
+    h = (
+        sb.table("houses")
+        .select("id, address, bot_id, status")
+        .eq("bot_id", bot_id)
+        .limit(1)
+        .execute()
+    )
+    if not h.data:
+        return {"error": f"no house has bot_id={bot_id}"}
+    house_id = h.data[0]["id"]
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(
+            "https://api.meetingbaas.com/bots/meeting_data",
+            headers={"x-meeting-baas-api-key": settings.meetingbaas_api_key},
+            params={"bot_id": bot_id},
+        )
+    r.raise_for_status()
+    data = r.json()["bot_data"]
+    audio_url = data.get("audio")
+    if not audio_url:
+        return {"error": "no audio URL in MB bot data"}
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        ar = await client.get(audio_url, follow_redirects=True)
+        ar.raise_for_status()
+        audio_bytes = ar.content
+
+    storage_path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.wav"
+    sb.storage.from_("tour-audio").upload(
+        path=storage_path,
+        file=audio_bytes,
+        file_options={"content-type": "audio/wav", "upsert": "true"},
+    )
+    sb.table("houses").update(
+        {"audio_url": storage_path, "status": "touring"}
+    ).eq("id", house_id).execute()
+
+    _process_audio_upload(house_id, audio_bytes, "audio/wav", "wav")
+
+    return {
+        "ok": True,
+        "house": house_id,
+        "bot_id": bot_id,
+        "audio_bytes": len(audio_bytes),
+        "storage_path": storage_path,
+    }
+
+
 @router.get("/streaming-url")
 async def debug_streaming_url(_: AuthUser = Depends(current_user)) -> dict:
     """Show the streaming URL we'd build for the latest house (without secrets).

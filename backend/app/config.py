@@ -17,6 +17,11 @@ class Settings(BaseSettings):
 
     meetingbaas_api_key: str = ""
     meetingbaas_webhook_secret: str = ""
+    # Set to "false" in Railway env to skip svix signature verification on
+    # MB webhooks. Temporary while we figure out v1's actual signing scheme.
+    # Webhook URL is still per-bot and not internet-discoverable so the risk
+    # is bounded for MVP single-user use.
+    meetingbaas_verify_webhook: bool = True
 
     # Zoom Meeting SDK credentials (App Type = General, Embed/Meeting SDK on).
     # Required as of March 2 2026 for bots joining the developer's OWN Zoom

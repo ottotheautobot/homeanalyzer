@@ -15,6 +15,7 @@ import httpx
 import sentry_sdk
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
+from app.config import settings
 from app.db.supabase import supabase
 from app.llm.synthesize import synthesize_house
 from app.providers.meetingbaas import get_meeting_provider
@@ -189,9 +190,17 @@ async def meetingbaas_webhook(
     body = await request.body()
     headers = dict(request.headers)
 
-    provider = get_meeting_provider()
-    if not provider.verify_webhook_signature(headers, body):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad signature")
+    log.info(
+        "mb webhook headers: %s",
+        {k: v for k, v in headers.items() if not k.lower().startswith("x-railway-")},
+    )
+
+    if settings.meetingbaas_verify_webhook:
+        provider = get_meeting_provider()
+        if not provider.verify_webhook_signature(headers, body):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad signature")
+    else:
+        log.warning("mb webhook signature verification BYPASSED (dev/MVP mode)")
 
     payload = json.loads(body)
     event = payload.get("event")
