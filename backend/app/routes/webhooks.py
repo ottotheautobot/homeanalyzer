@@ -195,8 +195,8 @@ async def meetingbaas_webhook(
         {k: v for k, v in headers.items() if not k.lower().startswith("x-railway-")},
     )
 
+    provider = get_meeting_provider()
     if settings.meetingbaas_verify_webhook:
-        provider = get_meeting_provider()
         if not provider.verify_webhook_signature(headers, body):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad signature")
     else:
