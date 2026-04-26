@@ -157,6 +157,9 @@ async def debug_meetingbaas(_: AuthUser = Depends(current_user)) -> dict:
         "key_prefix": key[:4] if key else "",
         "key_suffix": key[-4:] if len(key) > 8 else "",
     }
+    masked["verify_webhook"] = settings.meetingbaas_verify_webhook
+    masked["backend_url"] = settings.backend_url
+
     if not key:
         return {"masked": masked, "ping": "skipped"}
 
