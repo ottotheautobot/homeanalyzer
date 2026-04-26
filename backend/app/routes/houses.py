@@ -1,12 +1,15 @@
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import sentry_sdk
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
 
 router = APIRouter(tags=["houses"])
+log = logging.getLogger(__name__)
 
 
 class HouseCreate(BaseModel):
@@ -113,6 +116,38 @@ def list_houses(
 @router.get("/houses/{house_id}", response_model=HouseOut)
 def get_house(house_id: str, user: AuthUser = Depends(current_user)) -> HouseOut:
     return HouseOut(**get_house_for_user(house_id, user.id))
+
+
+@router.delete("/houses/{house_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_house(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> Response:
+    """Delete a house and all associated data: observations, transcripts
+    (cascaded by FK), plus storage files under {house_id}/. Stops any
+    active bot first."""
+    house = get_house_for_user(house_id, user.id)
+    sb = supabase()
+
+    if house.get("bot_id"):
+        from app.providers.meetingbaas import get_meeting_provider
+
+        try:
+            await get_meeting_provider().stop_bot(house["bot_id"])
+        except Exception as e:
+            log.exception("stop_bot failed during delete for house %s", house_id)
+            sentry_sdk.capture_exception(e)
+
+    try:
+        files = sb.storage.from_("tour-audio").list(house_id) or []
+        paths = [f"{house_id}/{f['name']}" for f in files if f.get("name")]
+        if paths:
+            sb.storage.from_("tour-audio").remove(paths)
+    except Exception as e:
+        log.exception("storage cleanup failed for house %s", house_id)
+        sentry_sdk.capture_exception(e)
+
+    sb.table("houses").delete().eq("id", house_id).execute()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(
