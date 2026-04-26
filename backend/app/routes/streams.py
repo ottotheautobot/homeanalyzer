@@ -161,9 +161,19 @@ async def stream_audio(
 
             try:
                 frames_forwarded = 0
+                text_frames = 0
+                empty_frames = 0
+                last_log = 0
                 while True:
                     msg = await websocket.receive()
                     if msg["type"] == "websocket.disconnect":
+                        log.info(
+                            "MB disconnected bot=%s frames_forwarded=%d text_frames=%d empty=%d",
+                            bot_id,
+                            frames_forwarded,
+                            text_frames,
+                            empty_frames,
+                        )
                         break
                     data = msg.get("bytes")
                     if data:
@@ -175,6 +185,23 @@ async def stream_audio(
                                 bot_id,
                                 len(data),
                             )
+                        elif frames_forwarded - last_log >= 100:
+                            last_log = frames_forwarded
+                            log.info(
+                                "audio frames bot=%s count=%d",
+                                bot_id,
+                                frames_forwarded,
+                            )
+                    elif msg.get("text"):
+                        text_frames += 1
+                        if text_frames <= 3:
+                            log.info(
+                                "MB text frame bot=%s sample=%s",
+                                bot_id,
+                                msg["text"][:200],
+                            )
+                    else:
+                        empty_frames += 1
             except WebSocketDisconnect:
                 pass
             finally:
