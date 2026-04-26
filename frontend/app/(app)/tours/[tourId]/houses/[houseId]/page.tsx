@@ -31,13 +31,14 @@ const STATUS_PILL: Record<House["status"], { label: string; cls: string }> = {
   },
 };
 
-function formatPrice(n: number | null) {
+function formatPrice(n: number | null, kind: House["price_kind"]) {
   if (n == null) return null;
-  return n.toLocaleString("en-US", {
+  const dollars = n.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
   });
+  return kind === "rent" ? `${dollars}/mo` : dollars;
 }
 
 export default async function HousePage({
@@ -55,7 +56,7 @@ export default async function HousePage({
     ),
   ]);
 
-  const price = formatPrice(house.list_price);
+  const price = formatPrice(house.list_price, house.price_kind);
   const meta = [
     price,
     house.beds != null ? `${house.beds} bd` : null,
@@ -117,6 +118,17 @@ export default async function HousePage({
                 <span className="font-semibold text-zinc-900 dark:text-zinc-100 tabular-nums">
                   {house.overall_score.toFixed(1)}
                 </span>
+              </span>
+            ) : null}
+            {house.tour_started_at ? (
+              <span className="text-xs text-zinc-500">
+                Toured{" "}
+                {new Date(house.tour_started_at).toLocaleString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
               </span>
             ) : null}
           </div>

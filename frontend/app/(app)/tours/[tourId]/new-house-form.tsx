@@ -14,33 +14,31 @@ import type { House } from "@/lib/types";
 type Form = {
   address: string;
   list_price: string;
+  price_kind: "sale" | "rent";
   sqft: string;
   beds: string;
   baths: string;
-  listing_url: string;
-  scheduled_at: string;
 };
 
 const emptyForm: Form = {
   address: "",
   list_price: "",
+  price_kind: "sale",
   sqft: "",
   beds: "",
   baths: "",
-  listing_url: "",
-  scheduled_at: "",
 };
 
 function buildPayload(f: Form): Record<string, unknown> {
-  const out: Record<string, unknown> = { address: f.address.trim() };
+  const out: Record<string, unknown> = {
+    address: f.address.trim(),
+    price_kind: f.price_kind,
+  };
   const num = (s: string) => (s.trim() ? Number(s) : undefined);
   if (num(f.list_price) !== undefined) out.list_price = num(f.list_price);
   if (num(f.sqft) !== undefined) out.sqft = num(f.sqft);
   if (num(f.beds) !== undefined) out.beds = num(f.beds);
   if (num(f.baths) !== undefined) out.baths = num(f.baths);
-  if (f.listing_url.trim()) out.listing_url = f.listing_url.trim();
-  if (f.scheduled_at)
-    out.scheduled_at = new Date(f.scheduled_at).toISOString();
   return out;
 }
 
@@ -269,18 +267,38 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           )}
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="list_price">List price</Label>
-          <Input
-            id="list_price"
-            inputMode="numeric"
-            placeholder="850000"
-            value={form.list_price}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, list_price: e.target.value }))
-            }
-            disabled={create.isPending}
-          />
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label>Price</Label>
+          <div className="flex gap-2">
+            <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-800 p-0.5 shrink-0">
+              {(["sale", "rent"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, price_kind: k }))}
+                  disabled={create.isPending}
+                  className={`px-2.5 h-7 rounded-md text-xs font-medium transition-colors ${
+                    form.price_kind === k
+                      ? "bg-primary text-primary-foreground"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
+                  }`}
+                >
+                  {k === "sale" ? "Sale" : "Rent"}
+                </button>
+              ))}
+            </div>
+            <Input
+              id="list_price"
+              inputMode="numeric"
+              placeholder={form.price_kind === "rent" ? "3500/mo" : "850000"}
+              value={form.list_price}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, list_price: e.target.value }))
+              }
+              disabled={create.isPending}
+              className="flex-1"
+            />
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="sqft">Sqft</Label>
@@ -304,7 +322,7 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
             disabled={create.isPending}
           />
         </div>
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="baths">Baths</Label>
           <Input
             id="baths"
@@ -312,31 +330,6 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
             placeholder="2.5"
             value={form.baths}
             onChange={(e) => setForm((f) => ({ ...f, baths: e.target.value }))}
-            disabled={create.isPending}
-          />
-        </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label htmlFor="listing_url">Listing URL</Label>
-          <Input
-            id="listing_url"
-            type="url"
-            placeholder="https://www.zillow.com/..."
-            value={form.listing_url}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, listing_url: e.target.value }))
-            }
-            disabled={create.isPending}
-          />
-        </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label htmlFor="scheduled_at">Scheduled tour time</Label>
-          <Input
-            id="scheduled_at"
-            type="datetime-local"
-            value={form.scheduled_at}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, scheduled_at: e.target.value }))
-            }
             disabled={create.isPending}
           />
         </div>

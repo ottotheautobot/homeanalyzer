@@ -48,6 +48,7 @@ export type House = {
   tour_id: string;
   address: string;
   list_price: number | null;
+  price_kind: "sale" | "rent" | null;
   sqft: number | null;
   beds: number | null;
   baths: number | null;

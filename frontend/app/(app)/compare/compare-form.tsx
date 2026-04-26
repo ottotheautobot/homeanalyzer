@@ -104,7 +104,7 @@ export function CompareForm({
                         <div className="text-sm text-zinc-600 dark:text-zinc-400">
                           {[
                             h.list_price != null
-                              ? `$${h.list_price.toLocaleString()}`
+                              ? `$${h.list_price.toLocaleString()}${h.price_kind === "rent" ? "/mo" : ""}`
                               : null,
                             h.beds != null ? `${h.beds} bd` : null,
                             h.baths != null ? `${h.baths} ba` : null,

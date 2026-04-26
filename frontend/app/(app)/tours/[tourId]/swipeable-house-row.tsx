@@ -20,13 +20,14 @@ const STATUS_TONE: Record<House["status"], string> = {
   completed: "text-emerald-600 dark:text-emerald-400",
 };
 
-function formatPrice(n: number | null) {
+function formatPrice(n: number | null, kind: House["price_kind"]) {
   if (n == null) return null;
-  return n.toLocaleString("en-US", {
+  const dollars = n.toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
   });
+  return kind === "rent" ? `${dollars}/mo` : dollars;
 }
 
 export function SwipeableHouseRow({
@@ -78,7 +79,7 @@ export function SwipeableHouseRow({
     }
   }
 
-  const price = formatPrice(house.list_price);
+  const price = formatPrice(house.list_price, house.price_kind);
 
   return (
     <div className="relative overflow-hidden rounded-xl">

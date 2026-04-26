@@ -152,7 +152,11 @@ async def upload_audio(
     )
 
     sb.table("houses").update(
-        {"audio_url": storage_path, "status": "touring"}
+        {
+            "audio_url": storage_path,
+            "status": "touring",
+            "tour_started_at": "now()",
+        }
     ).eq("id", house_id).execute()
 
     background_tasks.add_task(_process_audio_upload, house_id, audio_bytes, mime, ext)

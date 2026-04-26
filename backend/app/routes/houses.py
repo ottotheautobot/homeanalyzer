@@ -25,11 +25,10 @@ log = logging.getLogger(__name__)
 class HouseCreate(BaseModel):
     address: str
     list_price: float | None = None
+    price_kind: str | None = None  # 'sale' | 'rent'
     sqft: int | None = None
     beds: float | None = None
     baths: float | None = None
-    listing_url: str | None = None
-    scheduled_at: datetime | None = None
 
 
 class HouseOut(BaseModel):
@@ -37,6 +36,7 @@ class HouseOut(BaseModel):
     tour_id: str
     address: str
     list_price: float | None
+    price_kind: str | None
     sqft: int | None
     beds: float | None
     baths: float | None
