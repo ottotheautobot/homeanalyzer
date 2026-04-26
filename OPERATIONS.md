@@ -51,6 +51,15 @@ General App with **Meeting SDK** + **Programmatic Join** features both toggled o
 |---|---|
 | API key | Railway env `DEEPGRAM_API_KEY` |
 
+## Resend (transactional email)
+
+Used for "tour starting on this house" notifications to tour participants.
+
+| Credential | Where | Notes |
+|---|---|---|
+| API key | Railway env `RESEND_API_KEY` | Free tier 100/day. Notifications are skipped silently if unset. |
+| From address | Railway env `RESEND_FROM_EMAIL` | Default `onboarding@resend.dev` works without domain verification but will hit spam often. Verify a domain in Resend → use `noreply@yourdomain.com` for prod. |
+
 ## Supabase
 
 | Credential | Where | Notes |
