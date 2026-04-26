@@ -2,6 +2,7 @@ import logging
 import time
 from uuid import uuid4
 
+import sentry_sdk
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
@@ -33,8 +34,9 @@ def _process_audio_upload(
 
     try:
         chunks = transcribe(audio_bytes, filename=f"{house_id}.{ext}", mime=mime)
-    except Exception:
+    except Exception as e:
         log.exception("transcription failed for house %s", house_id)
+        sentry_sdk.capture_exception(e)
         return
 
     if not chunks:
@@ -66,8 +68,9 @@ def _process_audio_upload(
         if window:
             try:
                 new_obs = extract_observations(window, recent_obs, room_hint=None)
-            except Exception:
+            except Exception as e:
                 log.exception("extraction failed at t=%s for house %s", t, house_id)
+                sentry_sdk.capture_exception(e)
                 new_obs = []
             if new_obs:
                 rows = [
@@ -104,8 +107,9 @@ def _process_audio_upload(
 
     try:
         synthesis = synthesize_house(house_res.data[0], chunks, obs_res.data)
-    except Exception:
+    except Exception as e:
         log.exception("synthesis failed for house %s", house_id)
+        sentry_sdk.capture_exception(e)
         sb.table("houses").update({"status": "completed"}).eq("id", house_id).execute()
         return
 
