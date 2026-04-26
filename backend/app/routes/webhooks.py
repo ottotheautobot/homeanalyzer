@@ -214,7 +214,7 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
 
     # Vision pass on the video first (if available) so the visual observations
     # land before synthesis runs and Sonnet can fold them into the brief.
-    if video_bytes:
+    if video_bytes and settings.enable_vision_analysis:
         try:
             from app.llm.vision import analyze_video
 

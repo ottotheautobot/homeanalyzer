@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # sends audio frames (verified with frame counters in streams.py).
     meetingbaas_enable_streaming: bool = False
 
+    # Vision pipeline: extract scene-change frames from the bot's mp4 and
+    # send to Haiku 4.5 for visual observations. ~$0.20-0.30 per 30-min tour.
+    # Set false in Railway env to skip if costs bite.
+    enable_vision_analysis: bool = True
+
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.
     resend_api_key: str = ""

@@ -159,6 +159,8 @@ async def debug_meetingbaas(_: AuthUser = Depends(current_user)) -> dict:
     }
     masked["verify_webhook"] = settings.meetingbaas_verify_webhook
     masked["backend_url"] = settings.backend_url
+    masked["enable_streaming"] = settings.meetingbaas_enable_streaming
+    masked["enable_vision_analysis"] = settings.enable_vision_analysis
 
     if not key:
         return {"masked": masked, "ping": "skipped"}
