@@ -8,6 +8,14 @@ export type Tour = {
   created_at: string;
 };
 
+export type TourSummary = Tour & {
+  house_count: number;
+  completed_count: number;
+  in_progress_count: number;
+  avg_score: number | null;
+  last_activity_at: string | null;
+};
+
 export type Me = {
   id: string;
   email: string;
@@ -50,6 +58,7 @@ export type House = {
   overall_notes: string | null;
   bot_id: string | null;
   current_room: string | null;
+  tour_started_at: string | null;
   audio_url: string | null;
   video_url: string | null;
   synthesis_md: string | null;

@@ -1,19 +1,13 @@
 import Link from "next/link";
 
 import { buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
-import type { Tour } from "@/lib/types";
+import type { TourSummary } from "@/lib/types";
 
 import { SwipeableTourRow } from "./swipeable-tour-row";
 
 export default async function ToursPage() {
-  const tours = await serverFetch<Tour[]>("/tours");
+  const tours = await serverFetch<TourSummary[]>("/tours");
 
   return (
     <div className="space-y-6">
@@ -25,14 +19,18 @@ export default async function ToursPage() {
       </div>
 
       {tours.length === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>No tours yet</CardTitle>
-            <CardDescription>
-              Start by creating a tour, then add the houses you plan to visit.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+        <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-12 text-center">
+          <h2 className="text-base font-semibold">No tours yet</h2>
+          <p className="text-sm text-zinc-500 mt-1">
+            Create a tour and add the houses you plan to visit.
+          </p>
+          <Link
+            href="/tours/new"
+            className={`${buttonVariants({ size: "lg" })} mt-4`}
+          >
+            Create your first tour
+          </Link>
+        </div>
       ) : (
         <>
           <p className="text-xs text-zinc-500">

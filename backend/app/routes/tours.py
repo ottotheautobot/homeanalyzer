@@ -28,6 +28,21 @@ class TourOut(BaseModel):
     created_at: datetime
 
 
+class TourSummary(BaseModel):
+    id: str
+    owner_user_id: str
+    name: str
+    location: str | None
+    zoom_pmr_url: str | None
+    status: str
+    created_at: datetime
+    house_count: int
+    completed_count: int
+    in_progress_count: int
+    avg_score: float | None
+    last_activity_at: datetime | None
+
+
 def _get_tour_for_user(tour_id: str, user_id: str) -> dict:
     sb = supabase()
     res = (
@@ -78,8 +93,8 @@ def create_tour(payload: TourCreate, user: AuthUser = Depends(current_user)) -> 
     return TourOut(**tour)
 
 
-@router.get("", response_model=list[TourOut])
-def list_tours(user: AuthUser = Depends(current_user)) -> list[TourOut]:
+@router.get("", response_model=list[TourSummary])
+def list_tours(user: AuthUser = Depends(current_user)) -> list[TourSummary]:
     sb = supabase()
     res = (
         sb.table("tour_participants")
@@ -89,7 +104,44 @@ def list_tours(user: AuthUser = Depends(current_user)) -> list[TourOut]:
     )
     tours = [row["tours"] for row in res.data if row.get("tours")]
     tours.sort(key=lambda t: t["created_at"], reverse=True)
-    return [TourOut(**t) for t in tours]
+    if not tours:
+        return []
+
+    tour_ids = [t["id"] for t in tours]
+    houses_res = (
+        sb.table("houses")
+        .select("tour_id, status, overall_score, tour_started_at")
+        .in_("tour_id", tour_ids)
+        .execute()
+    )
+    by_tour: dict[str, list[dict]] = {tid: [] for tid in tour_ids}
+    for h in houses_res.data or []:
+        by_tour.setdefault(h["tour_id"], []).append(h)
+
+    out: list[TourSummary] = []
+    for t in tours:
+        hs = by_tour.get(t["id"], [])
+        scores = [h["overall_score"] for h in hs if h.get("overall_score") is not None]
+        in_progress = sum(
+            1 for h in hs if h.get("status") in ("touring", "synthesizing")
+        )
+        completed = sum(1 for h in hs if h.get("status") == "completed")
+        last_activity = None
+        for h in hs:
+            ts = h.get("tour_started_at")
+            if ts and (last_activity is None or ts > last_activity):
+                last_activity = ts
+        out.append(
+            TourSummary(
+                **t,
+                house_count=len(hs),
+                completed_count=completed,
+                in_progress_count=in_progress,
+                avg_score=(sum(scores) / len(scores)) if scores else None,
+                last_activity_at=last_activity,
+            )
+        )
+    return out
 
 
 @router.get("/{tour_id}", response_model=TourOut)

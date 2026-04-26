@@ -19,8 +19,6 @@ export function TranscriptFeed({
   initial: Transcript[];
 }) {
   const [lines, setLines] = useState<Transcript[]>(initial);
-  const [status, setStatus] = useState<string>("connecting");
-  const [eventCount, setEventCount] = useState(0);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -35,60 +33,47 @@ export function TranscriptFeed({
           filter: `house_id=eq.${houseId}`,
         },
         (payload) => {
-          setEventCount((c) => c + 1);
           const t = payload.new as Transcript;
           setLines((prev) =>
-            prev.some((p) => p.id === t.id) ? prev : [...prev.slice(-50), t],
+            prev.some((p) => p.id === t.id) ? prev : [...prev.slice(-200), t],
           );
         },
       )
-      .subscribe((s, err) => {
-        setStatus(err ? `${s} (${err.message ?? err})` : s);
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [houseId]);
 
-  const debug = (
-    <p className="text-xs text-zinc-400 mt-1">
-      sub: {status} · events: {eventCount}
-    </p>
-  );
-
   if (lines.length === 0) {
     return (
-      <div>
-        <p className="text-sm text-zinc-500">
-          Waiting for the bot to start hearing audio…
-        </p>
-        {debug}
-      </div>
+      <p className="text-sm text-zinc-500">
+        Waiting for the bot to start hearing audio…
+      </p>
     );
   }
 
   return (
-    <div>
-    <ul className="space-y-1 text-sm">
+    <ul className="space-y-1.5 text-sm">
       {lines.map((t) => (
         <li
           key={t.id}
-          className="flex gap-2 text-zinc-700 dark:text-zinc-300 leading-snug"
+          className="flex gap-3 leading-snug animate-in fade-in slide-in-from-bottom-1 duration-300"
         >
-          <span className="shrink-0 text-xs text-zinc-400 tabular-nums w-10 mt-1">
+          <span className="shrink-0 text-xs text-zinc-400 tabular-nums w-10 mt-0.5">
             {formatTimestamp(t.start_seconds)}
           </span>
-          {t.speaker ? (
-            <span className="shrink-0 text-xs uppercase tracking-wide text-zinc-500 mt-1">
-              {t.speaker}
-            </span>
-          ) : null}
-          <span className="flex-1">{t.text}</span>
+          <div className="flex-1 min-w-0">
+            {t.speaker ? (
+              <span className="text-xs uppercase tracking-wide text-primary mr-1.5">
+                {t.speaker}
+              </span>
+            ) : null}
+            <span className="text-zinc-700 dark:text-zinc-300">{t.text}</span>
+          </div>
         </li>
       ))}
     </ul>
-    {debug}
-    </div>
   );
 }

@@ -11,11 +11,23 @@ import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
 
-const STATUS_LABEL: Record<House["status"], string> = {
-  upcoming: "Not yet toured",
-  touring: "Tour in progress",
-  synthesizing: "Generating brief…",
-  completed: "Synthesis ready",
+const STATUS_PILL: Record<House["status"], { label: string; cls: string }> = {
+  upcoming: {
+    label: "Not toured",
+    cls: "bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400",
+  },
+  touring: {
+    label: "Live",
+    cls: "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400",
+  },
+  synthesizing: {
+    label: "Generating brief…",
+    cls: "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400",
+  },
+  completed: {
+    label: "Brief ready",
+    cls: "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400",
+  },
 };
 
 function formatPrice(n: number | null) {
@@ -68,18 +80,34 @@ export default async function HousePage({
         >
           ← Tour
         </Link>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          {house.address}
-        </h1>
-        {meta ? (
-          <p className="text-zinc-600 dark:text-zinc-400">{meta}</p>
-        ) : null}
-        <p className="mt-1 text-xs uppercase tracking-wide text-zinc-500">
-          {STATUS_LABEL[house.status]}
-          {house.overall_score != null
-            ? ` · score ${house.overall_score.toFixed(1)}`
-            : ""}
-        </p>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {house.address}
+            </h1>
+            {meta ? (
+              <p className="text-zinc-600 dark:text-zinc-400 mt-0.5">{meta}</p>
+            ) : null}
+          </div>
+          <div className="shrink-0 flex flex-col items-end gap-1.5">
+            <span
+              className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md ${STATUS_PILL[house.status].cls}`}
+            >
+              {house.status === "touring" ? (
+                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              ) : null}
+              {STATUS_PILL[house.status].label}
+            </span>
+            {house.overall_score != null ? (
+              <span className="text-xs text-zinc-500">
+                Score{" "}
+                <span className="font-semibold text-zinc-900 dark:text-zinc-100 tabular-nums">
+                  {house.overall_score.toFixed(1)}
+                </span>
+              </span>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <Card>
@@ -90,7 +118,11 @@ export default async function HousePage({
         </CardHeader>
         <CardContent>
           {isLiveMultiParty ? (
-            <LiveTour house={house} zoomUrl={tour.zoom_pmr_url} />
+            <LiveTour
+              house={house}
+              zoomUrl={tour.zoom_pmr_url}
+              startedAt={house.tour_started_at}
+            />
           ) : house.status === "upcoming" ? (
             <StartTour
               houseId={house.id}

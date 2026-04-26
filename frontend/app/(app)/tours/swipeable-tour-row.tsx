@@ -8,12 +8,22 @@ import { useRef, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { clientFetch } from "@/lib/api-client";
-import type { Tour } from "@/lib/types";
+import type { TourSummary } from "@/lib/types";
 
 const SWIPE_REVEAL = 96; // px exposed when fully swiped
 const SWIPE_THRESHOLD = 40; // commit to revealed state past this
 
-export function SwipeableTourRow({ tour }: { tour: Tour }) {
+function timeAgo(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (diffSec < 60) return "just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+export function SwipeableTourRow({ tour }: { tour: TourSummary }) {
   const router = useRouter();
   const [offset, setOffset] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -82,24 +92,57 @@ export function SwipeableTourRow({ tour }: { tour: Tour }) {
             setRevealed(false);
           }
         }}
-        className="relative block rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+        className="relative block rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-primary/50 hover:shadow-sm transition-all"
         style={{
           transform: `translateX(${offset}px)`,
           transition: dragging.current ? "none" : "transform 200ms",
         }}
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <div>
-            <div className="font-medium">{tour.name}</div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-semibold tracking-tight truncate">
+              {tour.name}
+            </div>
             {tour.location ? (
-              <div className="text-sm text-zinc-600 dark:text-zinc-400">
+              <div className="text-sm text-zinc-600 dark:text-zinc-400 truncate">
                 {tour.location}
               </div>
             ) : null}
           </div>
-          <span className="text-xs uppercase tracking-wide text-zinc-500">
-            {tour.status}
+          {tour.in_progress_count > 0 ? (
+            <span className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-1 rounded-md">
+              <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              live
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex items-center gap-4 text-xs text-zinc-500">
+          <span>
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">
+              {tour.house_count}
+            </span>{" "}
+            {tour.house_count === 1 ? "house" : "houses"}
           </span>
+          {tour.completed_count > 0 ? (
+            <span>
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                {tour.completed_count}
+              </span>{" "}
+              done
+            </span>
+          ) : null}
+          {tour.avg_score != null ? (
+            <span>
+              avg{" "}
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                {tour.avg_score.toFixed(1)}
+              </span>
+            </span>
+          ) : null}
+          {tour.last_activity_at ? (
+            <span className="ml-auto">{timeAgo(tour.last_activity_at)}</span>
+          ) : null}
         </div>
       </Link>
 

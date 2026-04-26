@@ -2,19 +2,37 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { clientFetch } from "@/lib/api-client";
 import type { House } from "@/lib/types";
 
+function formatElapsed(startedAt: string | null): string {
+  if (!startedAt) return "0:00";
+  const start = new Date(startedAt).getTime();
+  const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export function LiveTour({
   house,
   zoomUrl,
+  startedAt,
 }: {
   house: House;
   zoomUrl: string | null;
+  startedAt: string | null;
 }) {
   const router = useRouter();
+  const [elapsed, setElapsed] = useState(() => formatElapsed(startedAt));
+
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(formatElapsed(startedAt)), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
 
   const endTour = useMutation({
     mutationFn: async (): Promise<House> =>
@@ -24,11 +42,17 @@ export function LiveTour({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 text-sm">
-        <span className="inline-block size-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span className="font-medium text-emerald-700 dark:text-emerald-400">
-          Bot in meeting
-        </span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span className="relative inline-flex items-center justify-center size-3">
+            <span className="absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-60" />
+            <span className="relative inline-block size-2.5 rounded-full bg-emerald-500" />
+          </span>
+          <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+            Bot is in the meeting
+          </span>
+        </div>
+        <span className="text-xs tabular-nums text-zinc-500">{elapsed}</span>
       </div>
 
       {zoomUrl ? (
@@ -36,29 +60,32 @@ export function LiveTour({
           href={zoomUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="block text-sm rounded-md border border-zinc-200 dark:border-zinc-800 px-3 py-2 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+          className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-3 py-2.5 hover:border-primary/40 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
         >
-          <div className="font-medium">Open Zoom meeting →</div>
-          <div className="text-xs text-zinc-500 truncate">{zoomUrl}</div>
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Open Zoom meeting</div>
+            <div className="text-xs text-zinc-500 truncate">{zoomUrl}</div>
+          </div>
+          <span className="text-zinc-400 ml-3 shrink-0">→</span>
         </a>
       ) : null}
 
-      <div className="pt-2">
-        <Button
-          variant="destructive"
-          onClick={() => endTour.mutate()}
-          disabled={endTour.isPending}
-        >
-          {endTour.isPending ? "Ending…" : "End tour"}
-        </Button>
-        {endTour.isError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-            {endTour.error instanceof Error
-              ? endTour.error.message
-              : "Failed to end tour"}
-          </p>
-        ) : null}
-      </div>
+      <Button
+        variant="destructive"
+        onClick={() => endTour.mutate()}
+        disabled={endTour.isPending}
+        size="lg"
+        className="w-full"
+      >
+        {endTour.isPending ? "Ending tour…" : "End tour"}
+      </Button>
+      {endTour.isError ? (
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {endTour.error instanceof Error
+            ? endTour.error.message
+            : "Failed to end tour"}
+        </p>
+      ) : null}
     </div>
   );
 }

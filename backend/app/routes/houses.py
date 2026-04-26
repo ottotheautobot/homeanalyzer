@@ -37,6 +37,7 @@ class HouseOut(BaseModel):
     overall_notes: str | None
     bot_id: str | None
     current_room: str | None
+    tour_started_at: datetime | None
     audio_url: str | None
     video_url: str | None
     synthesis_md: str | None
