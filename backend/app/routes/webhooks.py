@@ -219,8 +219,14 @@ async def meetingbaas_webhook(
 
     payload = json.loads(body)
     event = payload.get("event")
-    data_keys = list((payload.get("data") or {}).keys())
-    log.info("mb webhook event=%s data_keys=%s", event, data_keys)
+    data = payload.get("data") or {}
+    data_keys = list(data.keys())
+    status_code = (data.get("status") or {}).get("code") if isinstance(data.get("status"), dict) else None
+    error_message = (data.get("status") or {}).get("error_message") if isinstance(data.get("status"), dict) else None
+    log.info(
+        "mb webhook event=%s status_code=%s error=%s data_keys=%s",
+        event, status_code, error_message, data_keys,
+    )
 
     if event == "bot.completed" or event == "complete":
         bot_id = (payload.get("data") or {}).get("bot_id")
