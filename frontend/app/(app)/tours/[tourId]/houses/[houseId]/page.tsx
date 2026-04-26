@@ -7,6 +7,7 @@ import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
+import { RecordingPlayer } from "./recording-player";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
@@ -149,6 +150,15 @@ export default async function HousePage({
             <Synthesis markdown={house.synthesis_md} />
           </CardContent>
         </Card>
+      ) : null}
+
+      {house.status === "completed" && (house.video_url || house.audio_url) ? (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">
+            Recording
+          </h2>
+          <RecordingPlayer houseId={house.id} />
+        </section>
       ) : null}
 
       <section className="space-y-2">

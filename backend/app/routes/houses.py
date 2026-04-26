@@ -154,6 +154,37 @@ def get_house(house_id: str, user: AuthUser = Depends(current_user)) -> HouseOut
     return HouseOut(**get_house_for_user(house_id, user.id))
 
 
+class MediaUrls(BaseModel):
+    audio_url: str | None
+    video_url: str | None
+
+
+@router.get("/houses/{house_id}/media", response_model=MediaUrls)
+def get_media(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> MediaUrls:
+    """Return signed URLs for the house's archived audio + video. URLs expire
+    in 1 hour; the page refetches on next load."""
+    house = get_house_for_user(house_id, user.id)
+    sb = supabase()
+
+    def _sign(path: str | None) -> str | None:
+        if not path:
+            return None
+        try:
+            res = sb.storage.from_("tour-audio").create_signed_url(path, 3600)
+            return res.get("signedURL") or res.get("signedUrl")
+        except Exception as e:
+            log.exception("sign url failed for %s", path)
+            sentry_sdk.capture_exception(e)
+            return None
+
+    return MediaUrls(
+        audio_url=_sign(house.get("audio_url")),
+        video_url=_sign(house.get("video_url")),
+    )
+
+
 @router.delete("/houses/{house_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_house(
     house_id: str, user: AuthUser = Depends(current_user)
