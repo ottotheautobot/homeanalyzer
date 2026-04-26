@@ -11,12 +11,13 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 WHISPER_MODEL = "whisper-1"
-# OpenAI's hard limit is 25 MB. Stay well under to allow for HTTP overhead.
+# OpenAI's hard limit is 25 MB. Stay well under to allow for HTTP overhead
+# and WAV header.
 WHISPER_MAX_BYTES = 24 * 1024 * 1024
-# When chunking, ~10-min slices keep us well under the limit and produce
-# clean segment boundaries (Whisper is fine with mid-sentence cuts; it just
-# returns whatever it heard).
-CHUNK_SECONDS = 600
+# Soft target per chunk (~22 MB) — chunk_seconds is computed at runtime
+# from the actual framerate/channels/sampwidth so 24 kHz / 48 kHz inputs
+# don't blow past 25 MB.
+CHUNK_TARGET_BYTES = 22 * 1024 * 1024
 
 
 class TranscriptChunk(TypedDict):
@@ -57,11 +58,13 @@ def _transcribe_one(
     return out
 
 
-def _split_wav(audio_bytes: bytes, chunk_seconds: int) -> list[tuple[float, bytes]]:
-    """Split a WAV byte string at frame boundaries.
+def _split_wav(audio_bytes: bytes) -> list[tuple[float, bytes]]:
+    """Split a WAV byte string at frame boundaries into chunks <= ~22MB.
 
-    Returns a list of (offset_seconds, wav_bytes) where each wav_bytes is a
-    self-contained, valid WAV file Whisper can ingest.
+    Chunk size is computed from the actual framerate/channels/sampwidth so
+    a 24 kHz or 48 kHz source doesn't produce 28+ MB chunks that blow past
+    Whisper's 25 MB limit. Each returned wav_bytes is a self-contained
+    valid WAV file.
     """
     pieces: list[tuple[float, bytes]] = []
     src = wave.open(io.BytesIO(audio_bytes), "rb")
@@ -69,7 +72,16 @@ def _split_wav(audio_bytes: bytes, chunk_seconds: int) -> list[tuple[float, byte
         framerate = src.getframerate()
         nchannels = src.getnchannels()
         sampwidth = src.getsampwidth()
+        bytes_per_second = framerate * nchannels * sampwidth
+        chunk_seconds = max(60, CHUNK_TARGET_BYTES // bytes_per_second)
         chunk_frames = int(chunk_seconds * framerate)
+        log.info(
+            "split_wav: framerate=%d ch=%d width=%d -> %ds chunks",
+            framerate,
+            nchannels,
+            sampwidth,
+            chunk_seconds,
+        )
         offset_seconds = 0.0
         while True:
             frames = src.readframes(chunk_frames)
@@ -82,7 +94,7 @@ def _split_wav(audio_bytes: bytes, chunk_seconds: int) -> list[tuple[float, byte
                 out.setframerate(framerate)
                 out.writeframes(frames)
             pieces.append((offset_seconds, buf.getvalue()))
-            offset_seconds += len(frames) / (framerate * nchannels * sampwidth)
+            offset_seconds += len(frames) / bytes_per_second
     finally:
         src.close()
     return pieces
@@ -108,8 +120,8 @@ def transcribe(audio_bytes: bytes, filename: str, mime: str) -> list[TranscriptC
             f"audio is {size:,} bytes (>24 MB) and not WAV; can't safely chunk"
         )
 
-    log.info("transcribe: chunking %s bytes WAV into ~%ds slices", size, CHUNK_SECONDS)
-    pieces = _split_wav(audio_bytes, CHUNK_SECONDS)
+    log.info("transcribe: chunking %s bytes WAV", size)
+    pieces = _split_wav(audio_bytes)
     log.info("transcribe: %d chunks", len(pieces))
 
     all_segments: list[TranscriptChunk] = []
