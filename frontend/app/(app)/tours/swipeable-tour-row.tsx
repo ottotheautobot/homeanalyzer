@@ -69,11 +69,11 @@ export function SwipeableTourRow({ tour }: { tour: TourSummary }) {
   }
 
   return (
-    <div className="relative overflow-hidden rounded-lg">
+    <div className="relative overflow-hidden rounded-xl">
       <button
         type="button"
         onClick={() => setConfirming(true)}
-        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-white text-sm font-medium px-4"
+        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-white text-sm font-medium px-4 rounded-r-xl"
         style={{ width: SWIPE_REVEAL }}
         aria-label={`Delete ${tour.name}`}
       >

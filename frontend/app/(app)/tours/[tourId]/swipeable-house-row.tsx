@@ -81,11 +81,11 @@ export function SwipeableHouseRow({
   const price = formatPrice(house.list_price);
 
   return (
-    <div className="relative overflow-hidden rounded-lg">
+    <div className="relative overflow-hidden rounded-xl">
       <button
         type="button"
         onClick={() => setConfirming(true)}
-        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-white text-sm font-medium px-4"
+        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-white text-sm font-medium px-4 rounded-r-xl"
         style={{ width: SWIPE_REVEAL }}
         aria-label={`Delete ${house.address}`}
       >
@@ -104,7 +104,7 @@ export function SwipeableHouseRow({
             setRevealed(false);
           }
         }}
-        className="relative block rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+        className="relative block rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-primary/50 hover:shadow-sm transition-all"
         style={{
           transform: `translateX(${offset}px)`,
           transition: dragging.current ? "none" : "transform 200ms",
