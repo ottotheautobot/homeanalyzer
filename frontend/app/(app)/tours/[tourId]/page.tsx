@@ -9,8 +9,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
-import type { House, Tour } from "@/lib/types";
+import type { House, Tour, TourInvite } from "@/lib/types";
 
+import { InviteForm } from "./invite-form";
 import { NewHouseForm } from "./new-house-form";
 import { SwipeableHouseRow } from "./swipeable-house-row";
 
@@ -20,9 +21,12 @@ export default async function TourPage({
   params: Promise<{ tourId: string }>;
 }) {
   const { tourId } = await params;
-  const [tour, houses] = await Promise.all([
+  const [tour, houses, invites] = await Promise.all([
     serverFetch<Tour>(`/tours/${tourId}`),
     serverFetch<House[]>(`/tours/${tourId}/houses`),
+    serverFetch<TourInvite[]>(`/tours/${tourId}/invites`).catch(
+      () => [] as TourInvite[],
+    ),
   ]);
 
   return (
@@ -81,6 +85,32 @@ export default async function TourPage({
         <Card>
           <CardContent className="pt-6">
             <NewHouseForm tourId={tour.id} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-medium">Invites</h2>
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            <InviteForm tourId={tour.id} />
+            {invites.length > 0 ? (
+              <ul className="space-y-2 border-t border-zinc-200 dark:border-zinc-800 pt-3">
+                {invites.map((inv) => (
+                  <li
+                    key={inv.id}
+                    className="flex items-center justify-between text-sm"
+                  >
+                    <span className="font-medium">{inv.email}</span>
+                    <span className="text-xs uppercase tracking-wide text-zinc-500">
+                      {inv.role ?? "—"}
+                      {" · "}
+                      {inv.accepted_at ? "joined" : "pending"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </CardContent>
         </Card>
       </section>

@@ -8,6 +8,7 @@ from app.routes import (
     compare,
     debug,
     houses,
+    invites,
     me,
     realtime,
     streams,
@@ -36,6 +37,7 @@ app.add_middleware(
 app.include_router(me.router)
 app.include_router(tours.router)
 app.include_router(houses.router)
+app.include_router(invites.router)
 app.include_router(audio.router)
 app.include_router(realtime.router)
 app.include_router(webhooks.router)

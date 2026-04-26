@@ -15,6 +15,15 @@ export type Me = {
   default_zoom_url: string | null;
 };
 
+export type TourInvite = {
+  id: string;
+  tour_id: string;
+  email: string;
+  role: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+};
+
 export type House = {
   id: string;
   tour_id: string;
