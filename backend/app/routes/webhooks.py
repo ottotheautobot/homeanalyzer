@@ -237,7 +237,11 @@ async def meetingbaas_webhook(
     parsed = provider.parse_status_webhook(payload)
     if parsed:
         sb = supabase()
-        if parsed["code"] in ("call_ended", "in_call_not_recording"):
+        # Only call_ended is terminal. in_call_not_recording is transient
+        # (e.g. between joining the call and starting the recording, or a
+        # brief pause); flipping status on it would make the live UI hide
+        # itself mid-tour even though the bot is still in the meeting.
+        if parsed["code"] == "call_ended":
             sb.table("houses").update({"status": "synthesizing"}).eq(
                 "bot_id", parsed["bot_id"]
             ).execute()
