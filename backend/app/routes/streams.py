@@ -111,15 +111,12 @@ async def stream_audio(
 
     try:
         async with _deepgram().listen.v1.connect(
-            model="nova-3",
+            model="nova-2",
             encoding="linear16",
             sample_rate=16000,
             channels=1,
-            smart_format=True,
             punctuate=True,
             diarize=True,
-            interim_results=False,
-            endpointing=300,
         ) as dg_ws:
 
             async def recv_loop() -> None:
