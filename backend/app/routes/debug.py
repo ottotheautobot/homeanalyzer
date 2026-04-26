@@ -4,9 +4,48 @@ import httpx
 from fastapi import APIRouter, Depends
 
 from app.config import settings
+from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
 
 router = APIRouter(prefix="/debug", tags=["debug"])
+
+
+@router.get("/bot")
+async def debug_bot(_: AuthUser = Depends(current_user)) -> dict:
+    """Look up the latest bot we created and ask MB for its current state."""
+    sb = supabase()
+    h = (
+        sb.table("houses")
+        .select("id, address, status, bot_id, tour_started_at")
+        .not_.is_("bot_id", "null")
+        .order("tour_started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not h.data:
+        return {"error": "no house with a bot_id found"}
+    house = h.data[0]
+    bot_id = house["bot_id"]
+
+    headers = {"x-meeting-baas-api-key": settings.meetingbaas_api_key}
+    out: dict = {"house": house, "probes": []}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for path in (
+            f"/bots/{bot_id}",
+            f"/bots/meeting_data?bot_id={bot_id}",
+        ):
+            try:
+                r = await client.get(
+                    f"https://api.meetingbaas.com{path}", headers=headers
+                )
+                out["probes"].append(
+                    {"path": path, "status": r.status_code, "body": r.text[:600]}
+                )
+            except Exception as e:
+                out["probes"].append({"path": path, "error": repr(e)})
+
+    return out
 
 
 @router.get("/meetingbaas")
