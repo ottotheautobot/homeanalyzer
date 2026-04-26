@@ -109,6 +109,16 @@ def _backfill_transcripts_from_url(
 
 def _finalize(bot_id: str, payload: dict) -> None:
     """BG task triggered by bot.completed."""
+    log.info("_finalize start bot=%s payload_keys=%s", bot_id, list(payload.keys()))
+    try:
+        _finalize_inner(bot_id, payload)
+        log.info("_finalize ok bot=%s", bot_id)
+    except Exception as e:
+        log.exception("_finalize crashed bot=%s", bot_id)
+        sentry_sdk.capture_exception(e)
+
+
+def _finalize_inner(bot_id: str, payload: dict) -> None:
     house = _house_for_bot(bot_id)
     if not house:
         log.warning("bot.completed for unknown bot %s", bot_id)
@@ -118,8 +128,19 @@ def _finalize(bot_id: str, payload: dict) -> None:
 
     completion = get_meeting_provider().parse_completion_webhook(payload)
     if not completion:
-        log.warning("could not parse completion payload for bot %s", bot_id)
+        log.warning(
+            "could not parse completion payload for bot %s, payload data keys=%s",
+            bot_id,
+            list((payload.get("data") or {}).keys()),
+        )
         return
+    log.info(
+        "_finalize parsed bot=%s audio=%s video=%s transcript=%s",
+        bot_id,
+        bool(completion.get("audio_url")),
+        bool(completion.get("video_url")),
+        bool(completion.get("transcript_url")),
+    )
 
     audio_path = video_path = None
     if completion.get("audio_url"):
@@ -204,8 +225,10 @@ async def meetingbaas_webhook(
 
     payload = json.loads(body)
     event = payload.get("event")
+    data_keys = list((payload.get("data") or {}).keys())
+    log.info("mb webhook event=%s data_keys=%s", event, data_keys)
 
-    if event == "bot.completed":
+    if event == "bot.completed" or event == "complete":
         bot_id = (payload.get("data") or {}).get("bot_id")
         if bot_id:
             background.add_task(_finalize, bot_id, payload)

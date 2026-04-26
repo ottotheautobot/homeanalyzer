@@ -99,7 +99,7 @@ class MeetingBaasProvider(MeetingProvider):
         return None
 
     def parse_completion_webhook(self, payload: dict) -> CompletionPayload | None:
-        if payload.get("event") != "bot.completed":
+        if payload.get("event") not in ("bot.completed", "complete"):
             return None
         data = payload.get("data") or {}
         bot_id = data.get("bot_id")
