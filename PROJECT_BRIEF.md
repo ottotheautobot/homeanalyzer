@@ -29,6 +29,7 @@ The builder, his wife, and his buyer's agent — touring 10 rental homes in Fort
 | Bot abstraction | Implement a `MeetingProvider` interface; Meeting BaaS is the only concrete impl in v1; Recall implementation deferred |
 | Zoom plan | Free tier (40-min meeting cap acceptable; no single house tour exceeds 20 min) |
 | Zoom meeting model | Personal Meeting Room (PMR), URL configured once in app, reused per tour |
+| Zoom bot authorization | **Meeting SDK credentials** (`zoom_sdk_id` / `zoom_sdk_pwd`) on every MB bot create. Required as of Zoom's March 2 2026 OBF mandate; SDK creds bypass OBF for bots joining the developer's OWN Zoom account. App stays in Marketplace "development" mode — no review needed for single-user MVP. Add `ZOOM_SDK_ID` and `ZOOM_SDK_SECRET` env vars. |
 | Recording capture | Zoom handles audio; bot captures audio + video via Meeting BaaS |
 | Real-time transcription | **Deepgram nova-3 streaming** via Meeting BaaS audio WebSocket. Meeting BaaS' bundled transcription is post-meeting only (delivered as an S3 URL on `bot.completed`); brief originally assumed per-utterance webhooks — that turned out to be wrong. Bundled file is kept as a backstop for the synthesis pass. |
 | Provider pricing | Meeting BaaS bot+recording **~$0.44–0.625/hr** (token-denominated, not flat) + Deepgram streaming ~$0.43/hr ≈ **~$0.85/hr** all-in. Brief originally had $0.69/hr; corrected after API doc read. |

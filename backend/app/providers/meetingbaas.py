@@ -40,6 +40,9 @@ class MeetingBaasProvider(MeetingProvider):
             },
             "webhook_url": webhook_url,
         }
+        if settings.zoom_sdk_id and settings.zoom_sdk_secret:
+            body["zoom_sdk_id"] = settings.zoom_sdk_id
+            body["zoom_sdk_pwd"] = settings.zoom_sdk_secret
         if extra:
             body["extra"] = extra
 

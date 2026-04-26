@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     meetingbaas_api_key: str = ""
     meetingbaas_webhook_secret: str = ""
 
+    # Zoom Meeting SDK credentials (App Type = General, Embed/Meeting SDK on).
+    # Required as of March 2 2026 for bots joining the developer's OWN Zoom
+    # account (PMR or otherwise). Skips the OBF flow that's required for
+    # external customer meetings — fits our single-user MVP perfectly.
+    zoom_sdk_id: str = ""
+    zoom_sdk_secret: str = ""
+
     deepgram_api_key: str = ""
 
     # Public base URL for this backend, used to build webhook + streaming URLs
