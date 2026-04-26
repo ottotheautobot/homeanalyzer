@@ -3,15 +3,17 @@ import Link from "next/link";
 import { LiveRefresh } from "@/components/live-refresh";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
-import type { House, Observation } from "@/lib/types";
+import type { House, Observation, Tour } from "@/lib/types";
 
+import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
+import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
-import { UploadAudio } from "./upload-audio";
 
 const STATUS_LABEL: Record<House["status"], string> = {
   upcoming: "Not yet toured",
-  touring: "Processing audio…",
+  touring: "Tour in progress",
+  synthesizing: "Generating brief…",
   completed: "Synthesis ready",
 };
 
@@ -30,9 +32,10 @@ export default async function HousePage({
   params: Promise<{ tourId: string; houseId: string }>;
 }) {
   const { tourId, houseId } = await params;
-  const [house, observations] = await Promise.all([
+  const [house, observations, tour] = await Promise.all([
     serverFetch<House>(`/houses/${houseId}`),
     serverFetch<Observation[]>(`/houses/${houseId}/observations`),
+    serverFetch<Tour>(`/tours/${tourId}`),
   ]);
 
   const price = formatPrice(house.list_price);
@@ -44,6 +47,8 @@ export default async function HousePage({
   ]
     .filter(Boolean)
     .join(" · ");
+
+  const isLiveMultiParty = house.status === "touring" && !!house.bot_id;
 
   return (
     <div className="space-y-8">
@@ -75,10 +80,25 @@ export default async function HousePage({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Audio</CardTitle>
+          <CardTitle className="text-base">
+            {isLiveMultiParty ? "Live tour" : "Tour"}
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <UploadAudio houseId={house.id} />
+          {isLiveMultiParty ? (
+            <LiveTour house={house} zoomUrl={tour.zoom_pmr_url} />
+          ) : house.status === "upcoming" ? (
+            <StartTour
+              houseId={house.id}
+              defaultZoomUrl={tour.zoom_pmr_url}
+            />
+          ) : (
+            <p className="text-sm text-zinc-500">
+              {house.status === "synthesizing"
+                ? "Bot left the meeting. Generating the brief now — this usually takes about a minute."
+                : "Tour complete."}
+            </p>
+          )}
         </CardContent>
       </Card>
 

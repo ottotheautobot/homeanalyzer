@@ -30,7 +30,9 @@ The builder, his wife, and his buyer's agent — touring 10 rental homes in Fort
 | Zoom plan | Free tier (40-min meeting cap acceptable; no single house tour exceeds 20 min) |
 | Zoom meeting model | Personal Meeting Room (PMR), URL configured once in app, reused per tour |
 | Recording capture | Zoom handles audio; bot captures audio + video via Meeting BaaS |
-| Real-time transcription | Meeting BaaS bundled transcription ($0.69/hr all-in) |
+| Real-time transcription | **Deepgram nova-3 streaming** via Meeting BaaS audio WebSocket. Meeting BaaS' bundled transcription is post-meeting only (delivered as an S3 URL on `bot.completed`); brief originally assumed per-utterance webhooks — that turned out to be wrong. Bundled file is kept as a backstop for the synthesis pass. |
+| Provider pricing | Meeting BaaS bot+recording **~$0.44–0.625/hr** (token-denominated, not flat) + Deepgram streaming ~$0.43/hr ≈ **~$0.85/hr** all-in. Brief originally had $0.69/hr; corrected after API doc read. |
+| Webhook signing | Meeting BaaS uses **Svix** (`svix-id`/`svix-timestamp`/`svix-signature`). Use the `svix` Python package; do NOT roll a manual HMAC verifier. |
 | Streaming extraction LLM | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) |
 | Synthesis LLM | Claude Sonnet 4.6 (`claude-sonnet-4-6`) |
 | Prompt caching | **Mandatory** on extraction prompt prefix (system + tools + few-shot examples). Use `cache_control: {"type": "ephemeral"}` on stable blocks. 5-min TTL default. |

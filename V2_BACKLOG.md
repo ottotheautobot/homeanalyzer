@@ -17,6 +17,7 @@ Items deliberately deferred from v1 build. Revisit after Florida trip if the pro
 - **Per-tour shareable read-only "tour report" link.** Send to family, lender, or lawyer with a token-protected URL. No login required. Useful for buyer family decisions.
 - **Map view of tour with house markers colored by score.** Geographic overview helps spot neighborhood patterns.
 - **Voice-only observation capture (hold-to-record button).** For tours where Zoom isn't running. Falls back to async pipeline.
+- **Solo mode in-app recording with near-live transcript processing.** Today's solo path is post-tour upload of an externally-recorded file. Future: in-app recording (Web Audio / MediaRecorder), chunked upload every ~30s, same Haiku/Sonnet downstream. Unlocks Next Room markers tied to the audio timeline (currently only multi-party gets that). Locked-out by the v1 "in-app recording: out of scope" decision; revisit when the multi-party flow is proven.
 - **Consent-flow UI as first-class feature.** Template scripts ("Hi, I'm recording for personal notes — okay?"), consent capture on recording, jurisdiction-aware reminders for two-party-consent states. **Real differentiator vs. just-record-everything tools.**
 - **Programmatic Zoom meeting creation.** Currently using Personal Meeting Room (one persistent URL). Integrate with Zoom API to create fresh meetings per tour — better UX, cleaner separation between tours.
 - **Zoom Pro upgrade.** $15.99/mo removes 40-min cap on 3+ participant meetings. Currently a non-issue (tours <30 min) but a UX wart if a tour ever runs long.

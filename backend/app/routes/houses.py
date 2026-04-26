@@ -32,6 +32,8 @@ class HouseOut(BaseModel):
     status: str
     overall_score: float | None
     overall_notes: str | None
+    bot_id: str | None
+    current_room: str | None
     audio_url: str | None
     video_url: str | None
     synthesis_md: str | None

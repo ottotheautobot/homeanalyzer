@@ -18,9 +18,11 @@ export type House = {
   baths: number | null;
   listing_url: string | null;
   scheduled_at: string | null;
-  status: "upcoming" | "touring" | "completed";
+  status: "upcoming" | "touring" | "synthesizing" | "completed";
   overall_score: number | null;
   overall_notes: string | null;
+  bot_id: string | null;
+  current_room: string | null;
   audio_url: string | null;
   video_url: string | null;
   synthesis_md: string | null;

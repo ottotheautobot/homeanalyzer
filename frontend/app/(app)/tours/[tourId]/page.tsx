@@ -16,6 +16,7 @@ import { NewHouseForm } from "./new-house-form";
 const STATUS_TONE: Record<House["status"], string> = {
   upcoming: "text-zinc-500",
   touring: "text-amber-600 dark:text-amber-400",
+  synthesizing: "text-amber-600 dark:text-amber-400",
   completed: "text-emerald-600 dark:text-emerald-400",
 };
 
