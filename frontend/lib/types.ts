@@ -8,6 +8,13 @@ export type Tour = {
   created_at: string;
 };
 
+export type Me = {
+  id: string;
+  email: string;
+  name: string | null;
+  default_zoom_url: string | null;
+};
+
 export type House = {
   id: string;
   tour_id: string;

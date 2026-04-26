@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function NewTourForm() {
+export function NewTourForm({
+  defaultZoomUrl,
+}: {
+  defaultZoomUrl: string | null;
+}) {
   const [state, formAction, pending] = useActionState(createTour, {});
 
   return (
@@ -32,16 +36,22 @@ export function NewTourForm() {
         />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="zoom_pmr_url">Zoom Personal Meeting Room URL</Label>
+        <Label htmlFor="zoom_pmr_url">
+          Zoom Personal Meeting Room URL{" "}
+          <span className="text-zinc-500 font-normal">(optional)</span>
+        </Label>
         <Input
           id="zoom_pmr_url"
           name="zoom_pmr_url"
           type="url"
           placeholder="https://zoom.us/j/..."
+          defaultValue={defaultZoomUrl ?? ""}
           disabled={pending}
         />
         <p className="text-xs text-zinc-500">
-          Used by the meeting bot in v1's real-time mode (Hours 8–14).
+          {defaultZoomUrl
+            ? "Pre-filled from your account default. Leave as-is or override per tour."
+            : "Only needed for multi-party tours where a Zoom bot joins. Solo (audio upload) tours don't need it."}
         </p>
       </div>
       {state?.error ? (

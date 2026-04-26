@@ -1,8 +1,13 @@
 import Link from "next/link";
 
+import { serverFetch } from "@/lib/api-server";
+import type { Me } from "@/lib/types";
+
 import { NewTourForm } from "./new-tour-form";
 
-export default function NewTourPage() {
+export default async function NewTourPage() {
+  const me = await serverFetch<Me>("/me");
+
   return (
     <div className="max-w-lg space-y-6">
       <div>
@@ -16,7 +21,7 @@ export default function NewTourPage() {
           New tour
         </h1>
       </div>
-      <NewTourForm />
+      <NewTourForm defaultZoomUrl={me.default_zoom_url} />
     </div>
   );
 }
