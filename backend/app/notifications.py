@@ -128,5 +128,19 @@ def send_tour_started_email(
             tour_id,
         )
     except Exception as e:
+        # Resend's free tier with an unverified domain only allows sending
+        # to the account owner's email. That's a known config limitation,
+        # not a code bug — log it but don't page Sentry, otherwise every
+        # tour with non-owner participants triggers an alert. Verify a
+        # domain in Resend + change RESEND_FROM_EMAIL to fix permanently.
+        msg = str(e)
+        if "can only send testing emails" in msg:
+            log.warning(
+                "tour-started email skipped (Resend unverified-domain "
+                "limit) for tour %s: %s",
+                tour_id,
+                msg,
+            )
+            return
         log.exception("tour-started email send failed for tour %s", tour_id)
         sentry_sdk.capture_exception(e)

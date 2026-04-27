@@ -54,9 +54,56 @@ def _download_to_storage(url: str, house_id: str, suffix: str) -> str | None:
     return path
 
 
+def _compress_wav_to_opus(wav_bytes: bytes) -> bytes | None:
+    """Re-encode a WAV to opus-in-ogg via ffmpeg. ~12x smaller for typical
+    tour audio (24 kHz mono speech). Returns None on any ffmpeg failure so
+    callers can fall back to uploading the raw WAV."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "32k",
+                "-application",
+                "voip",
+                "-f",
+                "ogg",
+                "pipe:1",
+            ],
+            input=wav_bytes,
+            capture_output=True,
+            timeout=180,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        log.error(
+            "ffmpeg opus encode failed: %s",
+            e.stderr.decode("utf-8", "ignore")[:500],
+        )
+        return None
+    except Exception:
+        log.exception("audio compression crashed")
+        return None
+
+
 def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
     """Download audio + upload to storage. Returns (path, bytes) so the
-    caller can both archive and re-process without a second download."""
+    caller can both archive and re-process without a second download.
+
+    Storage upload is opus-compressed (saved as .ogg) because the raw WAV
+    from Meeting BaaS often exceeds Supabase Storage's per-object limit on
+    long tours — opus is ~12x smaller with no transcription quality loss.
+    The in-memory bytes returned are still the raw WAV so the existing
+    Whisper chunker in app.llm.whisper keeps working unchanged."""
     try:
         with httpx.stream("GET", url, timeout=300.0, follow_redirects=True) as r:
             r.raise_for_status()
@@ -66,13 +113,37 @@ def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
         sentry_sdk.capture_exception(e)
         return None, None
 
-    path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.wav"
+    opus = _compress_wav_to_opus(content)
+    if opus is not None:
+        path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.ogg"
+        upload_bytes = opus
+        upload_mime = "audio/ogg"
+        log.info(
+            "audio compressed: wav=%d B -> opus=%d B (%.1fx)",
+            len(content),
+            len(opus),
+            len(content) / max(len(opus), 1),
+        )
+    else:
+        # Fall back to raw WAV. May still fail if it's bigger than the
+        # bucket limit, but caller will get None and degrade gracefully.
+        path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.wav"
+        upload_bytes = content
+        upload_mime = "audio/wav"
+
     sb = supabase()
-    sb.storage.from_("tour-audio").upload(
-        path=path,
-        file=content,
-        file_options={"content-type": "audio/wav", "upsert": "true"},
-    )
+    try:
+        sb.storage.from_("tour-audio").upload(
+            path=path,
+            file=upload_bytes,
+            file_options={"content-type": upload_mime, "upsert": "true"},
+        )
+    except Exception as e:
+        log.exception("audio upload to storage failed")
+        sentry_sdk.capture_exception(e)
+        # Still return the in-memory bytes so synthesis can run from RAM
+        # even if archival failed — better partial success than nothing.
+        return None, content
     return path, content
 
 
