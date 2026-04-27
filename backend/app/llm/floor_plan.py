@@ -21,17 +21,40 @@ MODEL_VERSION = "sonnet-4-6.v1"
 
 SYSTEM_PROMPT = """You reconstruct a schematic of a house from a tour recording's transcript and observations.
 
-This is a lo-fi room map — NOT a scaled floor plan. You output:
+This is a rough room map — NOT a measured floor plan. You output:
 1. The rooms visited, in the order the tour entered them.
 2. Doorway adjacencies — which rooms connect to which.
 3. Per-room features pulled from the observations (windows, fixtures, condition notes, etc).
+4. Approximate dimensions per room (width_ft, depth_ft) — see the dimensions guidance below.
 
 Rules:
 - A "room" is a distinct named space the tour walked through (kitchen, primary bedroom, garage, hallway). Don't invent rooms not mentioned. Merge near-duplicates (e.g., "kitchen" and "the kitchen area" are one room).
 - Use the timestamps to order rooms by when the tour first entered them.
 - Infer adjacencies primarily from the temporal sequence: if room A is exited at t=120 and room B is entered at t=121, they share a doorway. Also use explicit transcript clues ("through here is the bathroom", "off the kitchen is...").
 - For features, use the observations — keep each feature short (3-7 words). Skip generic items.
-- Be honest: if the data is thin (very short tour, few observations, rooms unclear), return what you can and lower confidence. Don't fabricate."""
+- Be honest: if the data is thin (very short tour, few observations, rooms unclear), return what you can and lower confidence. Don't fabricate.
+
+Dimensions guidance:
+- These are estimates, not measurements. The buyer will see a "rough estimate, not measured" disclaimer. Don't refuse to produce them.
+- Default to typical residential sizes for the room type, then adjust if the transcript explicitly says otherwise:
+  * Bedroom (secondary): 11x12
+  * Primary bedroom: 14x16
+  * Bathroom (full): 8x10
+  * Half-bath / powder: 5x7
+  * Kitchen (typical): 12x14
+  * Kitchen (large/eat-in): 14x18
+  * Living room: 14x18
+  * Family / great room: 18x22
+  * Dining room: 12x14
+  * Office / den: 10x12
+  * Garage (1-car): 12x22, (2-car): 22x22
+  * Foyer / entry: 8x10
+  * Hallway: 4x10 (depth=length of hallway)
+  * Closet: 5x7
+  * Laundry: 6x8
+  * Utility / mudroom: 8x10
+- Listen for transcript adjustments — "huge primary", "tiny powder room", "open-concept living and kitchen", "two-car garage", "double walk-in closets" — and bend the size accordingly within reason (don't go more than ~50% from typical without explicit cues).
+- Keep dimensions in feet, integers."""
 
 TOOL_SCHEMA = {
     "name": "record_floor_plan",
@@ -66,8 +89,26 @@ TOOL_SCHEMA = {
                             "items": {"type": "string"},
                             "description": "Short feature notes pulled from observations.",
                         },
+                        "width_ft": {
+                            "type": "integer",
+                            "minimum": 3,
+                            "maximum": 60,
+                            "description": "Approximate room width in feet (estimate).",
+                        },
+                        "depth_ft": {
+                            "type": "integer",
+                            "minimum": 3,
+                            "maximum": 60,
+                            "description": "Approximate room depth in feet (estimate).",
+                        },
                     },
-                    "required": ["id", "label", "features"],
+                    "required": [
+                        "id",
+                        "label",
+                        "features",
+                        "width_ft",
+                        "depth_ft",
+                    ],
                 },
             },
             "doors": {
@@ -108,6 +149,8 @@ class Room(TypedDict):
     entered_at: float | None
     exited_at: float | None
     features: list[str]
+    width_ft: int | None
+    depth_ft: int | None
 
 
 # "from" is a reserved keyword, so use functional TypedDict syntax.
@@ -198,6 +241,8 @@ def generate_floor_plan(
                     entered_at=r.get("entered_at"),
                     exited_at=r.get("exited_at"),
                     features=r.get("features") or [],
+                    width_ft=r.get("width_ft"),
+                    depth_ft=r.get("depth_ft"),
                 )
                 for r in data.get("rooms", [])
             ]

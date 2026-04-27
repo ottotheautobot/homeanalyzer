@@ -75,6 +75,8 @@ export type FloorPlanRoom = {
   entered_at: number | null;
   exited_at: number | null;
   features: string[];
+  width_ft: number | null;
+  depth_ft: number | null;
 };
 
 export type FloorPlanDoor = {
