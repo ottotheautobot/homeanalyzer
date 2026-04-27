@@ -6,6 +6,35 @@ import { Map, Overlay, ZoomControl } from "pigeon-maps";
 
 import type { HouseMapPin } from "./page";
 
+// Carto Voyager basemap — modern OSM-derived styling, free for non-commercial
+// use with attribution. No API key required.
+function cartoVoyager(x: number, y: number, z: number, dpr?: number): string {
+  const subdomain = "abcd"[(x + y) % 4];
+  const retina = dpr && dpr >= 2 ? "@2x" : "";
+  return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}${retina}.png`;
+}
+
+const ATTRIBUTION = (
+  <>
+    {"Maps © "}
+    <a
+      href="https://carto.com/attributions"
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      CARTO
+    </a>
+    {" · Data © "}
+    <a
+      href="https://www.openstreetmap.org/copyright"
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      OpenStreetMap
+    </a>
+  </>
+);
+
 function scoreColor(score: number | null): string {
   if (score == null) return "#71717a"; // zinc-500
   if (score >= 8) return "#10b981"; // emerald-500
@@ -65,7 +94,9 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
           height={Math.min(560, typeof window !== "undefined" ? window.innerHeight - 240 : 480)}
           defaultCenter={center}
           defaultZoom={zoom}
-          attribution={false}
+          provider={cartoVoyager}
+          attributionPrefix={false}
+          attribution={ATTRIBUTION}
         >
           <ZoomControl />
           {pins.map((p) => {
