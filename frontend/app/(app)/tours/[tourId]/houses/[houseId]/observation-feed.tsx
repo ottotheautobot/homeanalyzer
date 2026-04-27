@@ -4,16 +4,20 @@ import { formatDistanceToNow } from "date-fns";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   LayoutGrid,
+  Loader2,
   MessageCircle,
   Quote,
   Video,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { clientFetch } from "@/lib/api-client";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import type { Observation } from "@/lib/types";
 
@@ -78,6 +82,12 @@ function formatTimestamp(seconds: number | null) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+type MediaResponse = {
+  audio_url: string | null;
+  video_url: string | null;
+  photo_url: string | null;
+};
+
 export function ObservationFeed({
   houseId,
   initial,
@@ -86,6 +96,38 @@ export function ObservationFeed({
   initial: Observation[];
 }) {
   const [observations, setObservations] = useState<Observation[]>(initial);
+  // Lazy-loaded once the first 'Show evidence' expander on this page asks for
+  // it. Shared across rows so we don't fetch the signed video URL N times.
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoState, setVideoState] = useState<"idle" | "loading" | "ready" | "missing">("idle");
+  const inflight = useRef<Promise<string | null> | null>(null);
+
+  async function ensureVideo(): Promise<string | null> {
+    if (videoState === "ready") return videoUrl;
+    if (videoState === "missing") return null;
+    if (inflight.current) return inflight.current;
+    setVideoState("loading");
+    inflight.current = clientFetch<MediaResponse>(
+      `/houses/${houseId}/media`,
+    )
+      .then((m) => {
+        if (m.video_url) {
+          setVideoUrl(m.video_url);
+          setVideoState("ready");
+          return m.video_url;
+        }
+        setVideoState("missing");
+        return null;
+      })
+      .catch(() => {
+        setVideoState("missing");
+        return null;
+      })
+      .finally(() => {
+        inflight.current = null;
+      });
+    return inflight.current;
+  }
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -128,6 +170,8 @@ export function ObservationFeed({
       {observations.map((obs) => {
         const meta = CATEGORY_META[obs.category];
         const Icon = meta.Icon;
+        const hasEvidence =
+          obs.source === "photo_analysis" && obs.recall_timestamp != null;
         return (
           <li
             key={obs.id}
@@ -174,10 +218,91 @@ export function ObservationFeed({
               <div className="text-sm text-zinc-900 dark:text-zinc-100 leading-snug">
                 {obs.content}
               </div>
+              {hasEvidence ? (
+                <EvidenceDisclosure
+                  timestamp={obs.recall_timestamp!}
+                  ensureVideo={ensureVideo}
+                  videoState={videoState}
+                />
+              ) : null}
             </div>
           </li>
         );
       })}
     </ul>
+  );
+}
+
+function EvidenceDisclosure({
+  timestamp,
+  ensureVideo,
+  videoState,
+}: {
+  timestamp: number;
+  ensureVideo: () => Promise<string | null>;
+  videoState: "idle" | "loading" | "ready" | "missing";
+}) {
+  const [open, setOpen] = useState(false);
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [missing, setMissing] = useState(videoState === "missing");
+
+  async function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (resolvedUrl) return;
+    setResolving(true);
+    const url = await ensureVideo();
+    setResolving(false);
+    if (url) setResolvedUrl(url);
+    else setMissing(true);
+  }
+
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        onClick={toggle}
+        className="inline-flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+      >
+        {open ? (
+          <ChevronDown className="size-3" />
+        ) : (
+          <ChevronRight className="size-3" />
+        )}
+        {open ? "Hide evidence" : "Show evidence"}
+      </button>
+      {open ? (
+        <div className="mt-1.5">
+          {resolving ? (
+            <p className="text-xs text-zinc-500 inline-flex items-center gap-1.5">
+              <Loader2 className="size-3 animate-spin" /> Loading video…
+            </p>
+          ) : missing ? (
+            <p className="text-xs text-zinc-500">
+              No video archived for this house — can&apos;t show evidence.
+            </p>
+          ) : resolvedUrl ? (
+            // 1s before the model's frame to 3s after. Most observations
+            // are about features visible across multiple frames, so a
+            // ±1s window almost always shows the thing the model saw.
+            <video
+              key={resolvedUrl + timestamp}
+              src={`${resolvedUrl}#t=${Math.max(0, timestamp - 1)},${timestamp + 3}`}
+              autoPlay
+              muted
+              loop
+              controls
+              playsInline
+              preload="metadata"
+              className="w-full max-w-sm rounded-md border border-zinc-200 dark:border-zinc-800 bg-black"
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
