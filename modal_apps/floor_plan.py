@@ -512,23 +512,28 @@ def _run_mast3r(frames: list[bytes], log) -> dict | None:
 def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
     """Segment + label rooms purely from MASt3R's reconstruction.
 
-    Pipeline:
+    v1.7 pipeline:
       1. Floor-plane fit + rotate so floor sits at Z=0.
-      2. Manhattan-axis alignment: rotate XY so the dominant wall direction
-         aligns with the X axis. Now all rooms share orientation.
-      3. Camera-trajectory clustering (DBSCAN on cam XY positions). Each
-         cluster ≈ one room.
-      4. Per cluster: gather points seen by frames in the cluster, filter to
-         wall heights, compute axis-aligned bbox in the Manhattan frame.
-      5. Vision-label each cluster's representative frame via Claude Haiku.
-      6. Door detection: trajectory crossings between cluster pairs.
+      2. Manhattan-axis alignment: rotate XY so dominant wall direction
+         lies along X. All rooms then share orientation.
+      3. Camera-trajectory clustering (DBSCAN on cam XY).
+      4. Per cluster: gather wall-height points VISIBILITY-FILTERED to
+         the cluster's cameras, then axis-aligned bbox.
+      5. Iterative overlap merge: pairs of clusters whose bboxes overlap
+         by IoU > 0.3 collapse into one room — fixes the case where MASt3R
+         wall-leakage through doorways spawned a duplicate "room" for what
+         is geometrically the same physical space.
+      6. Vision-label each surviving cluster via Claude Haiku.
+      7. Door detection from trajectory crossings, deduped + capped at
+         ~1.5 × num_rooms (typical houses don't have more).
+      8. Confidence recalibration: rooms with physically-implausible
+         dimensions for their vision label get downgraded.
     """
     import numpy as np
 
     pts3d_list = scene["pts3d"]
     confs_list = scene["confs"]
     poses = scene["poses"]
-    n_frames = len(pts3d_list)
 
     # Aggregate confident points + per-point frame attribution.
     CONF_THR = 1.5
@@ -562,7 +567,6 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
     wall_mask = (aligned_pts[:, 2] > 0.3) & (aligned_pts[:, 2] < 2.4)
     wall_xy = aligned_pts[wall_mask][:, :2]
     R_man = _manhattan_rotation(wall_xy, log)
-    # Apply 2D rotation to all XY coords.
     aligned_pts[:, :2] = aligned_pts[:, :2] @ R_man.T
     aligned_cams[:, :2] = aligned_cams[:, :2] @ R_man.T
     log.info("manhattan rotation applied")
@@ -573,61 +577,25 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
         raise RuntimeError("camera clustering produced no clusters")
     log.info("camera clustering -> %d clusters", len(clusters))
 
-    # 4. Per-cluster geometry: axis-aligned bbox of wall-height points seen
-    # by the cluster's frames.
-    cluster_frames = clusters  # dict: cluster_id -> list of frame indices
+    # 4. Per-cluster geometry, with view-association filter.
     rooms_raw = []
-    for cid, frame_idxs in sorted(cluster_frames.items()):
+    for cid, frame_idxs in sorted(clusters.items()):
         if not frame_idxs:
             continue
-        frame_set = np.array(frame_idxs, dtype=np.int32)
-        mask = np.isin(all_frame_idx, frame_set)
-        cpts = aligned_pts[mask]
-        if cpts.shape[0] > 0:
-            wh = (cpts[:, 2] > 0.1) & (cpts[:, 2] < 2.2)
-            cpts = cpts[wh]
-        cam_xy = aligned_cams[frame_idxs, :2]
-        if cpts.shape[0] >= 200:
-            polygon, w_m, d_m = _axis_aligned_bbox(cpts[:, :2])
-            confidence = 0.75 if len(frame_idxs) >= 4 else 0.5
-            source = "wall-points"
-        else:
-            polygon, w_m, d_m = _bbox_from_camera_path(cam_xy)
-            confidence = 0.3
-            source = "camera-path"
-        # pick representative frame: the one closest to the cluster centroid
-        centroid = cam_xy.mean(axis=0)
-        rep_local_idx = int(
-            np.argmin(np.linalg.norm(cam_xy - centroid, axis=1))
+        room = _compute_cluster_room(
+            cid, frame_idxs, aligned_pts, all_frame_idx, aligned_cams, log
         )
-        rep_frame_idx = frame_idxs[rep_local_idx]
-        log.info(
-            "cluster %d: %d frames, %d wall pts, source=%s, %.2fx%.2fm",
-            cid,
-            len(frame_idxs),
-            int(cpts.shape[0]),
-            source,
-            w_m,
-            d_m,
-        )
-        rooms_raw.append(
-            {
-                "cluster_id": cid,
-                "frame_indices": frame_idxs,
-                "polygon_m": polygon,
-                "width_m": round(float(w_m), 2),
-                "depth_m": round(float(d_m), 2),
-                "confidence": float(confidence),
-                "sample_count": len(frame_idxs),
-                "source": source,
-                "rep_frame_idx": rep_frame_idx,
-            }
-        )
-
+        if room is not None:
+            rooms_raw.append(room)
     if not rooms_raw:
         raise RuntimeError("no rooms produced after clustering")
 
-    # 5. Vision-label each cluster.
+    # 5. Iterative overlap merge — IoU > 0.3 collapses pairs.
+    rooms_raw = _merge_overlapping_clusters(
+        rooms_raw, aligned_pts, all_frame_idx, aligned_cams, log
+    )
+
+    # 6. Vision-label each cluster.
     labels = _label_clusters_via_vision(rooms_raw, frames, log)
     rooms_out = []
     for r, label in zip(rooms_raw, labels):
@@ -644,10 +612,12 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
             }
         )
 
-    # 6. Detect doors from trajectory crossings.
+    # 7. Detect + dedupe + cap doors.
+    final_clusters = {r["cluster_id"]: r["frame_indices"] for r in rooms_raw}
     doors_out = _detect_doors_from_trajectory(
-        aligned_cams[:, :2], cluster_frames, rooms_out, log
+        aligned_cams[:, :2], final_clusters, rooms_out, log
     )
+    doors_out = _cap_doors(doors_out, len(rooms_out), log)
 
     # Normalize: shift rooms + doors so global min is at origin.
     rooms_out, offset = _normalize_origin_with_offset(rooms_out)
@@ -655,7 +625,10 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
         d["x_m"] = float(d["x_m"] - offset[0])
         d["z_m"] = float(d["z_m"] - offset[1])
 
-    if all(r.get("confidence", 0) < 0.5 for r in rooms_out):
+    # 8. Confidence recalibration based on label-vs-dimension sanity.
+    rooms_out, any_downgraded = _recalibrate_confidence(rooms_out, log)
+
+    if any_downgraded or all(r.get("confidence", 0) < 0.5 for r in rooms_out):
         confidence_label = "low"
     elif sum(1 for r in rooms_out if r.get("confidence", 0) >= 0.7) >= max(
         1, len(rooms_out) // 2
@@ -671,11 +644,270 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
         "confidence": confidence_label,
         "notes": (
             "Reconstructed from tour video via MASt3R + intrinsic camera-cluster "
-            "segmentation + vision labeling. Polygons are axis-aligned in a "
-            "Manhattan-rotated world frame so all rooms share wall orientation."
+            "segmentation + vision labeling. v1.7 adds visibility filtering, "
+            "overlap merging, door capping, and dimension-based confidence "
+            "downgrades. Polygons are axis-aligned in a Manhattan-rotated world."
         ),
-        "model_version": "mast3r-intrinsic.v1",
+        "model_version": "mast3r-intrinsic.v1.8",
     }
+
+
+# ---------------------------------------------------------------------------
+# v1.7 helpers: per-cluster geometry, overlap merge, door cap, confidence
+# ---------------------------------------------------------------------------
+
+
+# Hard cap on camera-to-point distance for view-association. A point further
+# than this from any camera in the cluster is almost certainly seen through
+# a doorway from a neighboring room. v1.7 used 5m and saw 11.9×8m "bathrooms"
+# because adjacent-room walls were still in range. v1.8 tightens to 3m —
+# closer to the typical interior camera-to-wall distance in a single room.
+_VIEW_ASSOC_MAX_DIST_M = 3.0
+
+
+def _compute_cluster_room(
+    cid, frame_idxs, aligned_pts, all_frame_idx, aligned_cams, log
+):
+    """Build the per-cluster room dict given its frame indices.
+
+    Applies the v1.7 view-association filter: only keep wall-height points
+    within _VIEW_ASSOC_MAX_DIST_M of any camera in this cluster.
+    """
+    import numpy as np
+
+    frame_set = np.array(frame_idxs, dtype=np.int32)
+    mask = np.isin(all_frame_idx, frame_set)
+    cpts = aligned_pts[mask]
+    if cpts.shape[0] > 0:
+        wh = (cpts[:, 2] > 0.1) & (cpts[:, 2] < 2.2)
+        cpts = cpts[wh]
+
+    cam_xy = aligned_cams[frame_idxs, :2]
+
+    # View-association: each wall point must be within R of SOME camera in
+    # this cluster (XY only; we already wall-height-filtered along Z).
+    if cpts.shape[0] > 0 and len(cam_xy) > 0:
+        # Distance from each point to its nearest cluster camera. Brute force
+        # is fine — typical sizes are ~10k pts × ~30 cams = 300k pairs.
+        diffs = cpts[:, None, :2] - cam_xy[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        nearest = dists.min(axis=1)
+        keep = nearest <= _VIEW_ASSOC_MAX_DIST_M
+        cpts = cpts[keep]
+
+    if cpts.shape[0] >= 200:
+        polygon, w_m, d_m = _axis_aligned_bbox(cpts[:, :2])
+        confidence = 0.75 if len(frame_idxs) >= 4 else 0.5
+        source = "wall-points"
+    else:
+        polygon, w_m, d_m = _bbox_from_camera_path(cam_xy)
+        confidence = 0.3
+        source = "camera-path"
+
+    centroid = cam_xy.mean(axis=0)
+    rep_local_idx = int(
+        np.argmin(np.linalg.norm(cam_xy - centroid, axis=1))
+    )
+    rep_frame_idx = frame_idxs[rep_local_idx]
+    log.info(
+        "cluster %s: %d frames, %d wall pts (post-VA), source=%s, %.2fx%.2fm",
+        cid,
+        len(frame_idxs),
+        int(cpts.shape[0]),
+        source,
+        w_m,
+        d_m,
+    )
+    return {
+        "cluster_id": cid,
+        "frame_indices": frame_idxs,
+        "polygon_m": polygon,
+        "width_m": round(float(w_m), 2),
+        "depth_m": round(float(d_m), 2),
+        "confidence": float(confidence),
+        "sample_count": len(frame_idxs),
+        "source": source,
+        "rep_frame_idx": rep_frame_idx,
+    }
+
+
+def _bbox_iou(poly_a, poly_b) -> float:
+    """IoU of two axis-aligned bboxes given as 4-corner polygons in the
+    Manhattan frame."""
+    import numpy as np
+
+    a = np.array(poly_a, dtype=float)
+    b = np.array(poly_b, dtype=float)
+    a_min, a_max = a.min(0), a.max(0)
+    b_min, b_max = b.min(0), b.max(0)
+    inter_min = np.maximum(a_min, b_min)
+    inter_max = np.minimum(a_max, b_max)
+    inter_dims = np.clip(inter_max - inter_min, 0, None)
+    inter = float(inter_dims.prod())
+    if inter <= 0:
+        return 0.0
+    a_area = float((a_max - a_min).prod())
+    b_area = float((b_max - b_min).prod())
+    return inter / max(a_area + b_area - inter, 1e-9)
+
+
+# v1.8 merge thresholds. Both must hold for two clusters to collapse:
+#   - bbox IoU > 0.5 (was 0.3 in v1.7 → cascaded all 5 Savannah rooms to 1)
+#   - camera centroids within 2m of each other (the "are we actually in the
+#     same physical space" check). Adjacent rooms' bboxes can touch but
+#     their cameras are clearly in separate spots.
+_OVERLAP_IOU_THR = 0.5
+_OVERLAP_CENTROID_DIST_M = 2.0
+
+
+def _cluster_centroid(room, aligned_cams):
+    """Camera-position centroid for a cluster (XY only)."""
+    import numpy as np
+
+    cam_xy = aligned_cams[room["frame_indices"], :2]
+    return cam_xy.mean(axis=0)
+
+
+def _merge_overlapping_clusters(
+    rooms_raw, aligned_pts, all_frame_idx, aligned_cams, log
+):
+    """Iteratively merge cluster pairs that geometrically AND spatially are
+    the same physical room.
+
+    Geometric: bbox IoU > _OVERLAP_IOU_THR — handles MASt3R wall-leakage
+    attaching the same wall points to two clusters.
+    Spatial: camera centroids within _OVERLAP_CENTROID_DIST_M — guards
+    against cascading merges across genuinely separate adjacent rooms
+    whose bboxes happen to overlap because of leftover view-leakage."""
+    import numpy as np
+
+    if len(rooms_raw) <= 1:
+        return rooms_raw
+    rooms = list(rooms_raw)
+    while True:
+        best_score = 0.0
+        best_pair = None
+        for i in range(len(rooms)):
+            for j in range(i + 1, len(rooms)):
+                iou = _bbox_iou(rooms[i]["polygon_m"], rooms[j]["polygon_m"])
+                if iou <= _OVERLAP_IOU_THR:
+                    continue
+                ca = _cluster_centroid(rooms[i], aligned_cams)
+                cb = _cluster_centroid(rooms[j], aligned_cams)
+                cdist = float(np.linalg.norm(ca - cb))
+                if cdist > _OVERLAP_CENTROID_DIST_M:
+                    continue
+                # Score by IoU; ties broken by smaller centroid distance.
+                score = iou - cdist * 0.01
+                if score > best_score:
+                    best_score = score
+                    best_pair = (i, j, iou, cdist)
+        if best_pair is None:
+            break
+        i, j, iou, cdist = best_pair
+        a, b = rooms[i], rooms[j]
+        log.info(
+            "merging clusters %s + %s (IoU=%.2f, centroid_dist=%.2fm, frames %d+%d)",
+            a["cluster_id"],
+            b["cluster_id"],
+            iou,
+            cdist,
+            len(a["frame_indices"]),
+            len(b["frame_indices"]),
+        )
+        if len(a["frame_indices"]) >= len(b["frame_indices"]):
+            keep_id = a["cluster_id"]
+        else:
+            keep_id = b["cluster_id"]
+        merged_frames = sorted(set(a["frame_indices"]) | set(b["frame_indices"]))
+        merged = _compute_cluster_room(
+            keep_id, merged_frames, aligned_pts, all_frame_idx, aligned_cams, log
+        )
+        rooms.pop(j)
+        rooms.pop(i)
+        rooms.append(merged)
+    if len(rooms) != len(rooms_raw):
+        log.info(
+            "overlap merge: %d clusters -> %d rooms",
+            len(rooms_raw),
+            len(rooms),
+        )
+    rooms.sort(key=lambda r: str(r["cluster_id"]))
+    return rooms
+
+
+def _cap_doors(doors, num_rooms, log):
+    """Dedupe + cap door count at ~1.5 × num_rooms.
+
+    Trajectory crossings can over-fire when the camera bobs back and forth
+    between two clusters at a doorway. We're already deduping pairs in
+    _detect_doors_from_trajectory, but if a tour visits 5 rooms in a tight
+    sequence we get 4-8 pair crossings even though typical houses have 4-6
+    actual doorways."""
+    import math
+
+    cap = max(1, math.ceil(num_rooms * 1.5))
+    if len(doors) <= cap:
+        return doors
+    log.info(
+        "capping doors: %d -> %d (cap = ceil(%d × 1.5))",
+        len(doors),
+        cap,
+        num_rooms,
+    )
+    # Keep first N — the trajectory builder emits in time order, which is
+    # a decent proxy for "actually traversed". Could weight by repeat
+    # crossings later.
+    return doors[:cap]
+
+
+# Per-label dimension caps (meters). Rooms exceeding both width AND depth
+# of these caps get confidence downgraded — they're usually wall-leakage
+# blowing out the bbox into a neighboring space.
+_LABEL_MAX_DIMS_M = {
+    "bathroom": (4.0, 4.0),
+    "closet": (3.0, 3.0),
+    "laundry": (4.5, 4.5),
+    "hallway": (10.0, 3.0),  # hallways can be long but should be narrow
+    "entryway": (4.0, 4.0),
+    "stairs": (3.0, 5.0),
+}
+_GLOBAL_MAX_DIM_M = 9.0
+_MAX_ASPECT_RATIO = 4.0
+
+
+def _recalibrate_confidence(rooms, log):
+    """Downgrade confidence on rooms whose geometry is implausible for their
+    vision label. Returns (rooms, any_downgraded)."""
+    any_downgraded = False
+    for r in rooms:
+        w = float(r.get("width_m") or 0)
+        d = float(r.get("depth_m") or 0)
+        label = (r.get("label") or "").lower()
+        reasons = []
+        if max(w, d) > _GLOBAL_MAX_DIM_M:
+            reasons.append(f"max-dim {max(w, d):.1f}m > {_GLOBAL_MAX_DIM_M}m")
+        if min(w, d) > 0 and max(w, d) / min(w, d) > _MAX_ASPECT_RATIO:
+            reasons.append(
+                f"aspect {max(w, d) / min(w, d):.1f} > {_MAX_ASPECT_RATIO}"
+            )
+        cap = _LABEL_MAX_DIMS_M.get(label)
+        if cap is not None:
+            cw, cd = cap
+            if w > cw and d > cd:
+                reasons.append(
+                    f"{label} {w:.1f}x{d:.1f} > cap {cw:.1f}x{cd:.1f}"
+                )
+        if reasons:
+            log.info(
+                "confidence DOWNGRADE r%s '%s': %s",
+                r.get("id", "?"),
+                label,
+                "; ".join(reasons),
+            )
+            r["confidence"] = min(float(r.get("confidence", 0.3)), 0.3)
+            any_downgraded = True
+    return rooms, any_downgraded
 
 
 def _manhattan_rotation(wall_xy, log):
