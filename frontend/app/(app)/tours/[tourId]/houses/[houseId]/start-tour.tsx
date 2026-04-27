@@ -39,6 +39,11 @@ export function StartTour({
       setOpen(false);
       router.refresh();
     },
+    // Refresh on error too: if the call timed out client-side but the bot
+    // was actually created server-side, the next render reflects the truth.
+    onError: () => {
+      router.refresh();
+    },
   });
 
   function close() {
