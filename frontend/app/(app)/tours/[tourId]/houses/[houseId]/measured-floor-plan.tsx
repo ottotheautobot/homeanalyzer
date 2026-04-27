@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, RefreshCcw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
@@ -283,8 +283,39 @@ export function MeasuredFloorPlanControls({
     },
   });
 
+  const poll = useMutation({
+    mutationFn: async (): Promise<House> =>
+      clientFetch<House>(`/houses/${house.id}/measure-floorplan-poll`, {
+        method: "POST",
+      }),
+    onSuccess: (h) => {
+      // Only refresh the page when the status actually moved off pending —
+      // otherwise the next render restarts the interval and we hammer the
+      // backend.
+      if (h.measured_floor_plan_status !== "pending") {
+        router.refresh();
+      }
+    },
+  });
+
   const status = house.measured_floor_plan_status;
   const isPending = status === "pending" || start.isPending;
+
+  // Poll the backend every 30s while the row is pending. This is the
+  // result-recovery path for the spawn() architecture — even if the worker
+  // that called spawn died, any worker hitting this endpoint can pick up
+  // the FunctionCall by id and write the result.
+  useEffect(() => {
+    if (status !== "pending") return;
+    const id = window.setInterval(() => poll.mutate(), 30_000);
+    // One immediate poll on mount so users who land mid-flight don't wait 30s.
+    const t = window.setTimeout(() => poll.mutate(), 500);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, house.id]);
   const hasFailed = status === "failed";
   const startedAt = house.measured_floor_plan_started_at
     ? new Date(house.measured_floor_plan_started_at)

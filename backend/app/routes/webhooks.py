@@ -8,7 +8,6 @@ Hours 3-8.
 
 import json
 import logging
-import threading
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -272,7 +271,7 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
         and update.get("video_duration_seconds", 0) >= 30
     ):
         try:
-            from app.routes.measured_floorplan import _run_modal_job
+            from app.routes.measured_floorplan import spawn_modal_job
 
             # Re-read the schematic from DB — synthesis just wrote it.
             fresh = (
@@ -291,26 +290,30 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
                     "measured_floor_plan_started_at": datetime.now(
                         timezone.utc
                     ).isoformat(),
+                    "measured_floor_plan_modal_call_id": None,
                 }
             ).eq("id", house_id).execute()
-            # _run_modal_job blocks until Modal returns the result (~5-10 min)
-            # so spawn it in a daemon thread to keep the webhook handler free.
-            t = threading.Thread(
-                target=_run_modal_job,
-                kwargs={
-                    "house_id": house_id,
-                    "video_storage_path": update["video_url"],
-                    "schematic": schematic,
-                },
-                daemon=True,
+
+            # Modal.spawn() returns immediately with a FunctionCall id we
+            # persist on the row. The frontend polls measure-floorplan-poll
+            # to retrieve the result — no daemon thread needed, so a Railway
+            # worker restart doesn't lose the job.
+            call_id = spawn_modal_job(
+                house_id=house_id,
+                video_storage_path=update["video_url"],
+                schematic=schematic,
             )
-            t.start()
-            log.info(
-                "_finalize spawned measured floor-plan job house=%s "
-                "(schematic_rooms=%d)",
-                house_id,
-                len((schematic or {}).get("rooms") or []),
-            )
+            if call_id:
+                sb.table("houses").update(
+                    {"measured_floor_plan_modal_call_id": call_id}
+                ).eq("id", house_id).execute()
+                log.info(
+                    "_finalize spawned measured floor-plan house=%s call_id=%s "
+                    "(schematic_rooms=%d)",
+                    house_id,
+                    call_id,
+                    len((schematic or {}).get("rooms") or []),
+                )
         except Exception as e:
             log.exception("failed to spawn measured floor-plan job house=%s", house_id)
             sentry_sdk.capture_exception(e)
