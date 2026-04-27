@@ -308,7 +308,7 @@ export function MeasuredFloorPlanControls({
               </div>
               <div className="text-xs text-zinc-500">
                 {stalePending
-                  ? "Started over 20 minutes ago — the GPU job most likely died on a worker restart. Cancel to clear, or retry to start fresh."
+                  ? "Started over 20 minutes ago — the GPU job most likely died on a worker restart."
                   : "Reconstructing camera path and room geometry on a GPU. Usually 5–15 minutes."}
                 {startedAt
                   ? ` Started ${startedAt.toLocaleTimeString()}.`
@@ -316,27 +316,25 @@ export function MeasuredFloorPlanControls({
               </div>
             </div>
           </div>
-          {stalePending ? (
-            <div className="flex flex-wrap gap-2 pl-7">
-              <Button
-                onClick={() => start.mutate()}
-                disabled={start.isPending || cancel.isPending}
-                size="sm"
-                variant="secondary"
-              >
-                <RefreshCcw className="size-3.5 mr-1.5" />
-                Retry
-              </Button>
-              <Button
-                onClick={() => cancel.mutate()}
-                disabled={start.isPending || cancel.isPending}
-                size="sm"
-                variant="ghost"
-              >
-                Cancel
-              </Button>
-            </div>
-          ) : null}
+          <div className="flex flex-wrap gap-2 pl-7">
+            <Button
+              onClick={() => start.mutate()}
+              disabled={start.isPending || cancel.isPending}
+              size="sm"
+              variant="secondary"
+            >
+              <RefreshCcw className="size-3.5 mr-1.5" />
+              Retry
+            </Button>
+            <Button
+              onClick={() => cancel.mutate()}
+              disabled={start.isPending || cancel.isPending}
+              size="sm"
+              variant="ghost"
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       ) : (
         <Button
