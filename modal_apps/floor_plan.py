@@ -203,7 +203,7 @@ def reconstruct_floor_plan(
             # Tag the model version with the primitive so we can filter rerun
             # candidates later without re-deriving from stats.
             plan["model_version"] = (
-                f"{primitive}-intrinsic.v2.3"
+                f"{primitive}-intrinsic.v2.4"
                 if primitive == "vggt"
                 else plan.get("model_version", "mast3r-intrinsic.v1.8")
             )
@@ -542,21 +542,73 @@ def _run_vggt(frames: list[bytes], log) -> dict | None:
 
     # VGGT outputs are scale-normalized (NOT metric meters). Calibrate to
     # metric by assuming the camera was held at ~1.4m above the floor —
-    # typical handheld phone height. Find the floor as the lowest 5% of
-    # points, then scale so (median camera height − floor height) ≈ 1.4m.
+    # typical handheld phone height.
+    #
+    # For multi-story tours we have to detect bimodality BEFORE scaling,
+    # otherwise the median camera height lands between the two floors
+    # and the resulting scale compresses the real 2.7m floor gap below
+    # our detection threshold. So:
+    #   1. Detect bimodal cam-up distribution in raw space.
+    #   2. If multi-story → scale using FLOOR 1's median camera height
+    #      (the lower mode) so each floor lands at the correct absolute
+    #      Z. Tag each frame with floor_idx.
+    #   3. If single-story → scale using all cameras' median height as
+    #      before.
     cam_pos = cam2w[:, :3, 3]  # (F, 3)
     all_xyz = np.concatenate(pts3d, axis=0)
-    # Pick "up axis" as the one with smallest camera variance (the user
-    # walks horizontally, not vertically).
     cam_var = np.var(cam_pos, axis=0)
     up_axis = int(np.argmin(cam_var))
     pt_up = all_xyz[:, up_axis]
     cam_up = cam_pos[:, up_axis]
-    # Floor candidate: 5th percentile of point-cloud up-coord (below floor
-    # is rare; above-floor walls/ceiling dominate).
     floor_up = float(np.percentile(pt_up, 5))
-    cam_up_med = float(np.median(cam_up))
-    rel_height = abs(cam_up_med - floor_up)
+
+    # --- Pre-scale multi-story detection ---
+    # In raw VGGT units, a real ~2.7m floor gap shows up as ~0.2-0.3
+    # (depends on the scene's normalization). Use a relative threshold:
+    # require the gap to be at least 25% of the cam-up span.
+    raw_span = float(cam_up.max() - cam_up.min())
+    floor_assignments = None  # per-frame floor index, or None if single-story
+    cam_up_med_for_scale = float(np.median(cam_up))
+    multi_story_gap_raw = 0.0
+    multi_story = False
+    if F >= 10 and raw_span > 1e-4:
+        try:
+            from sklearn.cluster import KMeans
+
+            km = KMeans(n_clusters=2, n_init=10, random_state=42).fit(
+                cam_up.reshape(-1, 1)
+            )
+            centers = sorted(km.cluster_centers_.flatten().tolist())
+            gap = centers[1] - centers[0]
+            counts = [int((km.labels_ == i).sum()) for i in (0, 1)]
+            # Bimodality criteria:
+            #   - gap >= 0.25 × full span (clearly bimodal, not noise)
+            #   - both clusters have >= 5 frames
+            if (
+                gap >= 0.25 * raw_span
+                and min(counts) >= 5
+            ):
+                multi_story = True
+                multi_story_gap_raw = gap
+                # Re-label so floor 1 is lower mode (lower cam-up).
+                lower_center_idx = int(np.argmin(km.cluster_centers_.flatten()))
+                lower_mask = km.labels_ == lower_center_idx
+                floor_assignments = [
+                    1 if lower_mask[i] else 2 for i in range(F)
+                ]
+                # Use floor-1 cameras' median for scale anchoring so the
+                # 1.4m height assumption holds against floor-1's floor.
+                cam_up_med_for_scale = float(np.median(cam_up[lower_mask]))
+                log.info(
+                    "VGGT multi-story (raw): gap=%.4f span=%.4f frames=%s",
+                    gap,
+                    raw_span,
+                    counts,
+                )
+        except Exception:
+            log.exception("multi-story detection failed; treating as single-story")
+
+    rel_height = abs(cam_up_med_for_scale - floor_up)
     if rel_height < 1e-3:
         log.warning(
             "VGGT scale calibration: camera height delta near zero (%.5f); "
@@ -569,12 +621,13 @@ def _run_vggt(frames: list[bytes], log) -> dict | None:
         scale = TARGET_CAM_HEIGHT_M / rel_height
     log.info(
         "VGGT scale calibration: up_axis=%d floor_up=%.4f cam_up_med=%.4f "
-        "delta=%.4f scale=%.4f",
+        "delta=%.4f scale=%.4f multi_story=%s",
         up_axis,
         floor_up,
-        cam_up_med,
+        cam_up_med_for_scale,
         rel_height,
         scale,
+        multi_story,
     )
     if not (0.01 < scale < 100):
         log.warning("scale out of plausible range; clamping to 1.0")
@@ -602,6 +655,10 @@ def _run_vggt(frames: list[bytes], log) -> dict | None:
         "poses": cam2w,
         "focals": focals,
         "n_points": n_points,
+        # Pre-computed multi-story signal from raw (pre-scale) cam-up
+        # distribution. None for single-story tours; a list of 1-based
+        # floor indices per frame for multi-story.
+        "floor_assignments": floor_assignments,
     }
 
 
@@ -800,8 +857,38 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
     aligned_cams[:, :2] = aligned_cams[:, :2] @ R_man.T
     log.info("manhattan rotation applied")
 
-    # 2.5. Multi-story detection from camera Z distribution.
-    floors = _detect_floors(aligned_cams[:, 2], log)
+    # 2.5. Multi-story segmentation. Prefer the primitive's pre-computed
+    # floor assignments when present (VGGT detects bimodality in raw,
+    # pre-scale-calibration space, where the real floor gap isn't
+    # compressed by our 1.4m camera-height assumption). Fall back to
+    # detecting from scaled aligned_cams for primitives that don't
+    # provide assignments.
+    pre_assignments = scene.get("floor_assignments")
+    if pre_assignments is not None and len(pre_assignments) == len(aligned_cams):
+        import numpy as np  # noqa: F811
+
+        floors = []
+        for f_idx in sorted(set(pre_assignments)):
+            f_frame_idxs = [
+                i for i, a in enumerate(pre_assignments) if a == f_idx
+            ]
+            if not f_frame_idxs:
+                continue
+            f_z = aligned_cams[f_frame_idxs, 2]
+            floors.append(
+                {
+                    "floor_idx": f_idx,
+                    "z_min": float(f_z.min()),
+                    "z_max": float(f_z.max()),
+                    "frame_indices": f_frame_idxs,
+                }
+            )
+        log.info(
+            "using pre-computed floor assignments from primitive: %d floor(s)",
+            len(floors),
+        )
+    else:
+        floors = _detect_floors(aligned_cams[:, 2], log)
     log.info(
         "detected %d floor(s): %s",
         len(floors),
