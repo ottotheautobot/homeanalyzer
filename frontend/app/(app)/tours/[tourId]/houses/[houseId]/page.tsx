@@ -16,7 +16,6 @@ import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
 import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
-import { RegenerateFloorPlan } from "./regenerate-floor-plan";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
@@ -181,14 +180,10 @@ export default async function HousePage({
 
       {house.status === "completed" ? (
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
             <CardTitle className="text-base">Layout</CardTitle>
-            <RegenerateFloorPlan
-              houseId={house.id}
-              hasPlan={!!house.floor_plan_json}
-            />
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             {house.measured_floor_plan_json &&
             house.measured_floor_plan_status === "ready" &&
             house.measured_floor_plan_json.rooms?.length ? (
@@ -197,14 +192,12 @@ export default async function HousePage({
               <FloorPlanView plan={house.floor_plan_json} />
             ) : (
               <p className="text-sm text-zinc-500">
-                No layout sketch yet. Click Generate to build one from this
-                tour&apos;s transcript and observations.
+                Generating layout from this tour&apos;s transcript and
+                observations…
               </p>
             )}
             {house.video_url ? (
-              <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
-                <MeasuredFloorPlanControls house={house} />
-              </div>
+              <MeasuredFloorPlanControls house={house} />
             ) : null}
           </CardContent>
         </Card>

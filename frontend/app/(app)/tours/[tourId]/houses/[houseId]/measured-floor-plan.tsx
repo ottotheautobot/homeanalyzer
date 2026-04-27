@@ -244,8 +244,10 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
 }
 
 /**
- * Loading + control panel: shown when measurement is pending or hasn't run.
- * Posts to /houses/{id}/measure-floorplan on click.
+ * Single control surface for the floor plan: generate / regenerate /
+ * cancel / retry. Hides itself once a measured plan is ready (small
+ * "Re-measure" link only). Schematic regeneration isn't surfaced — the
+ * schematic is internal plumbing now (tier-2 fallback for MASt3R).
  */
 export function MeasuredFloorPlanControls({
   house,
@@ -367,6 +369,16 @@ export function MeasuredFloorPlanControls({
             </Button>
           </div>
         </div>
+      ) : status === "ready" ? (
+        // Quiet "redo" affordance once a measured plan is rendered above.
+        <button
+          type="button"
+          onClick={() => start.mutate()}
+          className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:underline inline-flex items-center gap-1"
+        >
+          <RefreshCcw className="size-3" />
+          Re-measure from video
+        </button>
       ) : (
         <Button
           onClick={() => start.mutate()}
@@ -375,7 +387,7 @@ export function MeasuredFloorPlanControls({
           size="sm"
         >
           <RefreshCcw className="size-3.5 mr-1.5" />
-          {hasFailed ? "Retry measurement" : "Measure layout (beta)"}
+          {hasFailed ? "Retry" : "Generate floor plan"}
         </Button>
       )}
       {hasFailed && house.measured_floor_plan_error ? (
