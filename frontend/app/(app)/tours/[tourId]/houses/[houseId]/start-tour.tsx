@@ -12,6 +12,7 @@ import { Modal } from "@/components/ui/modal";
 import { clientFetch } from "@/lib/api-client";
 import type { House } from "@/lib/types";
 
+import { RecordAudio } from "./record-audio";
 import { UploadAudio } from "./upload-audio";
 
 type Mode = "picker" | "solo" | "multi";
@@ -135,9 +136,13 @@ export function StartTour({
         {mode === "solo" ? (
           <div className="space-y-4">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Pick the audio file once you&apos;re back from the tour.
+              Record the tour right here in your browser, or upload a file
+              you recorded elsewhere.
             </p>
-            <UploadAudio houseId={houseId} />
+            <RecordAudio houseId={houseId} />
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
+              <UploadAudio houseId={houseId} />
+            </div>
             <div className="flex justify-end">
               <Button variant="ghost" onClick={() => setMode("picker")}>
                 Back
