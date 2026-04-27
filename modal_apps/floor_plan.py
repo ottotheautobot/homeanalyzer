@@ -30,8 +30,13 @@ WEIGHTS_PATH = "/weights"
 MAST3R_PATH = "/opt/mast3r"
 weights_vol = modal.Volume.from_name("floorplan-weights", create_if_missing=True)
 
+# CUDA-devel base so we have nvcc available for the curope kernel build.
+# `add_python` installs CPython at the requested version. PyTorch 2.4 wheels
+# match CUDA 12.1, hence the matching base.
 floorplan_image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.1.0-devel-ubuntu22.04", add_python="3.11"
+    )
     .apt_install(
         "git",
         "ffmpeg",
@@ -71,9 +76,19 @@ floorplan_image = (
     .run_commands(
         f"git clone --recursive https://github.com/naver/mast3r {MAST3R_PATH}",
         # MASt3R's own requirements.txt is light — most heavy deps already listed above.
-        # Skipping curope CUDA kernel build: pure-PyTorch fallback is plenty fast for 60 frames.
         f"pip install -r {MAST3R_PATH}/requirements.txt || true",
         f"pip install -r {MAST3R_PATH}/dust3r/requirements.txt || true",
+        # Build the curope rotary-embedding CUDA kernel. Without this MASt3R
+        # falls back to pure PyTorch, which is ~3-5x slower on the pairwise
+        # encoder pass. TORCH_CUDA_ARCH_LIST limits the build to A10G's
+        # compute capability so it doesn't compile for every GPU class.
+        (
+            "cd " + MAST3R_PATH + "/dust3r/croco/models/curope && "
+            "CC=gcc CXX=g++ "
+            "TORCH_CUDA_ARCH_LIST=8.6 "
+            "FORCE_CUDA=1 "
+            "python setup.py build_ext --inplace"
+        ),
     )
     .env(
         {
