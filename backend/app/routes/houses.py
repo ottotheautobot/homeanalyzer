@@ -240,7 +240,7 @@ def list_houses_for_map(
         sb.table("houses")
         .select(
             "id, tour_id, address, latitude, longitude, geocoded_at, "
-            "overall_score, status, photo_signed_url"
+            "overall_score, status, photo_url"
         )
         .in_("tour_id", tour_ids)
         .execute()
@@ -295,7 +295,7 @@ def list_houses_for_map(
                 longitude=float(lng),
                 overall_score=h.get("overall_score"),
                 status=h.get("status") or "upcoming",
-                photo_signed_url=h.get("photo_signed_url"),
+                photo_signed_url=_sign_photo(h.get("photo_url")),
             )
         )
     return HouseMapResponse(
