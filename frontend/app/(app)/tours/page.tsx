@@ -5,6 +5,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { serverFetch } from "@/lib/api-server";
 import type { TourSummary } from "@/lib/types";
 
+import { QuickTourButton } from "./quick-tour";
 import { SwipeableTourRow } from "./swipeable-tour-row";
 
 export default async function ToursPage() {
@@ -12,12 +13,15 @@ export default async function ToursPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-semibold tracking-tight">Tours</h1>
-        <Link href="/tours/new" className={buttonVariants({ size: "sm" })}>
-          <Plus className="size-4" strokeWidth={2.5} />
-          <span className="ml-1">New tour</span>
-        </Link>
+        <div className="flex items-center gap-2">
+          <QuickTourButton />
+          <Link href="/tours/new" className={buttonVariants({ size: "sm" })}>
+            <Plus className="size-4" strokeWidth={2.5} />
+            <span className="ml-1">New tour</span>
+          </Link>
+        </div>
       </div>
 
       {tours.length === 0 ? (

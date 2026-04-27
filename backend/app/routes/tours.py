@@ -94,6 +94,109 @@ def create_tour(payload: TourCreate, user: AuthUser = Depends(current_user)) -> 
     return TourOut(**tour)
 
 
+class QuickTourRequest(BaseModel):
+    address: str
+    list_price: float | None = None
+    price_kind: str | None = None
+    beds: float | None = None
+    baths: float | None = None
+    sqft: float | None = None
+
+
+class QuickTourResponse(BaseModel):
+    tour_id: str
+    house_id: str
+    tour_was_created: bool
+
+
+@router.post("/quick", response_model=QuickTourResponse)
+def quick_tour(
+    payload: QuickTourRequest, user: AuthUser = Depends(current_user)
+) -> QuickTourResponse:
+    """Spontaneous tour: address-only flow. Reuses the user's most recent
+    tour if it was created within the last 7 days, else mints a fresh tour
+    named "Tour {YYYY-MM-DD}". Adds a house under it. Returns the new
+    house_id so the client can navigate straight to it."""
+    from datetime import timedelta
+
+    address = payload.address.strip()
+    if len(address) < 4:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Address required (min 4 chars)"
+        )
+
+    sb = supabase()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=7)
+    ).isoformat()
+
+    recent = (
+        sb.table("tours")
+        .select("*")
+        .eq("owner_user_id", user.id)
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if recent.data:
+        tour = recent.data[0]
+        tour_was_created = False
+    else:
+        u = (
+            sb.table("users")
+            .select("default_zoom_url")
+            .eq("id", user.id)
+            .limit(1)
+            .execute()
+        )
+        zoom = (u.data[0] if u.data else {}).get("default_zoom_url")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        tour_res = (
+            sb.table("tours")
+            .insert(
+                {
+                    "owner_user_id": user.id,
+                    "name": f"Tour {today}",
+                    "location": None,
+                    "zoom_pmr_url": zoom,
+                }
+            )
+            .execute()
+        )
+        tour = tour_res.data[0]
+        sb.table("tour_participants").upsert(
+            {"tour_id": tour["id"], "user_id": user.id, "role": "buyer"},
+            on_conflict="tour_id,user_id",
+        ).execute()
+        tour_was_created = True
+
+    house_payload = {
+        "tour_id": tour["id"],
+        "address": address,
+        "status": "upcoming",
+    }
+    if payload.list_price is not None:
+        house_payload["list_price"] = payload.list_price
+    if payload.price_kind:
+        house_payload["price_kind"] = payload.price_kind
+    if payload.beds is not None:
+        house_payload["beds"] = payload.beds
+    if payload.baths is not None:
+        house_payload["baths"] = payload.baths
+    if payload.sqft is not None:
+        house_payload["sqft"] = payload.sqft
+
+    house_res = sb.table("houses").insert(house_payload).execute()
+    house = house_res.data[0]
+
+    return QuickTourResponse(
+        tour_id=tour["id"],
+        house_id=house["id"],
+        tour_was_created=tour_was_created,
+    )
+
+
 @router.get("", response_model=list[TourSummary])
 def list_tours(user: AuthUser = Depends(current_user)) -> list[TourSummary]:
     sb = supabase()
