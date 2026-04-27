@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LiveRefresh } from "@/components/live-refresh";
+import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
@@ -76,6 +77,7 @@ export default async function HousePage({
         table="houses"
         filter={`id=eq.${house.id}`}
       />
+      <RefreshOnVisibility />
       <div>
         <Link
           href={`/tours/${tourId}`}

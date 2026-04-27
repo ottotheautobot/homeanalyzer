@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LiveRefresh } from "@/components/live-refresh";
+import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
 import {
   Card,
   CardContent,
@@ -37,6 +38,7 @@ export default async function TourPage({
         table="houses"
         filter={`tour_id=eq.${tour.id}`}
       />
+      <RefreshOnVisibility />
       <div>
         <Link
           href="/tours"
