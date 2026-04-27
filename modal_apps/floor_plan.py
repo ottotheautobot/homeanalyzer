@@ -203,7 +203,7 @@ def reconstruct_floor_plan(
             # Tag the model version with the primitive so we can filter rerun
             # candidates later without re-deriving from stats.
             plan["model_version"] = (
-                f"{primitive}-intrinsic.v2.4"
+                f"{primitive}-intrinsic.v2.5"
                 if primitive == "vggt"
                 else plan.get("model_version", "mast3r-intrinsic.v1.8")
             )
@@ -562,51 +562,15 @@ def _run_vggt(frames: list[bytes], log) -> dict | None:
     cam_up = cam_pos[:, up_axis]
     floor_up = float(np.percentile(pt_up, 5))
 
-    # --- Pre-scale multi-story detection ---
-    # In raw VGGT units, a real ~2.7m floor gap shows up as ~0.2-0.3
-    # (depends on the scene's normalization). Use a relative threshold:
-    # require the gap to be at least 25% of the cam-up span.
-    raw_span = float(cam_up.max() - cam_up.min())
-    floor_assignments = None  # per-frame floor index, or None if single-story
+    # Geometric multi-story detection (v2.2-v2.4) was unreliable:
+    # bimodality in the raw cam-up distribution can come from real floor
+    # changes OR from camera tilt within a single floor (looking up at
+    # ceilings, down at the floor). Without more multi-story tours to
+    # tune against, we hand floor-tagging entirely to the frontend's
+    # schematic-label parser, which keys on Sonnet's "upstairs",
+    # "first-floor", etc. — a deterministic signal from the transcript.
+    floor_assignments = None
     cam_up_med_for_scale = float(np.median(cam_up))
-    multi_story_gap_raw = 0.0
-    multi_story = False
-    if F >= 10 and raw_span > 1e-4:
-        try:
-            from sklearn.cluster import KMeans
-
-            km = KMeans(n_clusters=2, n_init=10, random_state=42).fit(
-                cam_up.reshape(-1, 1)
-            )
-            centers = sorted(km.cluster_centers_.flatten().tolist())
-            gap = centers[1] - centers[0]
-            counts = [int((km.labels_ == i).sum()) for i in (0, 1)]
-            # Bimodality criteria:
-            #   - gap >= 0.25 × full span (clearly bimodal, not noise)
-            #   - both clusters have >= 5 frames
-            if (
-                gap >= 0.25 * raw_span
-                and min(counts) >= 5
-            ):
-                multi_story = True
-                multi_story_gap_raw = gap
-                # Re-label so floor 1 is lower mode (lower cam-up).
-                lower_center_idx = int(np.argmin(km.cluster_centers_.flatten()))
-                lower_mask = km.labels_ == lower_center_idx
-                floor_assignments = [
-                    1 if lower_mask[i] else 2 for i in range(F)
-                ]
-                # Use floor-1 cameras' median for scale anchoring so the
-                # 1.4m height assumption holds against floor-1's floor.
-                cam_up_med_for_scale = float(np.median(cam_up[lower_mask]))
-                log.info(
-                    "VGGT multi-story (raw): gap=%.4f span=%.4f frames=%s",
-                    gap,
-                    raw_span,
-                    counts,
-                )
-        except Exception:
-            log.exception("multi-story detection failed; treating as single-story")
 
     rel_height = abs(cam_up_med_for_scale - floor_up)
     if rel_height < 1e-3:
@@ -621,13 +585,12 @@ def _run_vggt(frames: list[bytes], log) -> dict | None:
         scale = TARGET_CAM_HEIGHT_M / rel_height
     log.info(
         "VGGT scale calibration: up_axis=%d floor_up=%.4f cam_up_med=%.4f "
-        "delta=%.4f scale=%.4f multi_story=%s",
+        "delta=%.4f scale=%.4f",
         up_axis,
         floor_up,
         cam_up_med_for_scale,
         rel_height,
         scale,
-        multi_story,
     )
     if not (0.01 < scale < 100):
         log.warning("scale out of plausible range; clamping to 1.0")
