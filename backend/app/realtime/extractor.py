@@ -109,7 +109,11 @@ def _extract_for(bot_id: str, house_id: str, room_hint: str | None) -> int:
                     "content": o["content"],
                     "severity": o.get("severity"),
                     "source": "transcript",
-                    "recall_timestamp": chunks[0]["start_seconds"],
+                    "recall_timestamp": (
+                        o.get("recall_timestamp")
+                        if o.get("recall_timestamp") is not None
+                        else chunks[0]["start_seconds"]
+                    ),
                 }
                 for o in new_obs
             ]

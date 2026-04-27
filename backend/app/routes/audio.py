@@ -82,7 +82,11 @@ def _process_audio_upload(
                         "content": o["content"],
                         "severity": o.get("severity"),
                         "source": "transcript",
-                        "recall_timestamp": window[0]["start_seconds"],
+                        "recall_timestamp": (
+                            o.get("recall_timestamp")
+                            if o.get("recall_timestamp") is not None
+                            else window[0]["start_seconds"]
+                        ),
                     }
                     for o in new_obs
                 ]

@@ -36,6 +36,7 @@ For each observation, set:
   critical: safety risk, legal exposure, or deal-breaker (mold, structural, major code issue)
   warn: significant issue (aging system, deferred maintenance, expensive fix)
   info: noted but minor
+- recall_timestamp: seconds-into-tour from the transcript line that produced this observation. The transcript shows a [Ns] prefix on each line — copy that number. If multiple lines feed the observation, use the earliest. This is critical: the UI sorts by this so the buyer can jump to the moment in the recording.
 
 Already-captured observations are listed in the user message — do not duplicate them.
 
@@ -77,8 +78,18 @@ TOOL_SCHEMA = {
                             "enum": [None, "info", "warn", "critical"],
                             "description": "Severity for hazards/concerns; null otherwise.",
                         },
+                        "recall_timestamp": {
+                            "type": "number",
+                            "description": "Seconds-into-tour of the transcript line that produced this observation; copy from the [Ns] prefix shown.",
+                        },
                     },
-                    "required": ["room", "category", "content", "severity"],
+                    "required": [
+                        "room",
+                        "category",
+                        "content",
+                        "severity",
+                        "recall_timestamp",
+                    ],
                 },
             }
         },
@@ -87,11 +98,12 @@ TOOL_SCHEMA = {
 }
 
 
-class ObservationCandidate(TypedDict):
+class ObservationCandidate(TypedDict, total=False):
     room: str | None
     category: str
     content: str
     severity: str | None
+    recall_timestamp: float
 
 
 @lru_cache(maxsize=1)
