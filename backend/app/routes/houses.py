@@ -211,6 +211,35 @@ def _geocode_house(house_id: str, address: str) -> None:
         ).execute()
 
 
+@router.post("/houses/regeocode", response_model=dict)
+def regeocode_all_houses(user: AuthUser = Depends(current_user)) -> dict:
+    """Clear cached lat/lng/geocoded_at for every house the user can see.
+    The next /houses/map call re-geocodes them all under whatever validation
+    rules are in effect now. Useful after we tighten the address-match
+    rules — old pins from a looser pass become bogus and need re-checking."""
+    sb = supabase()
+    tp = (
+        sb.table("tour_participants")
+        .select("tour_id")
+        .eq("user_id", user.id)
+        .execute()
+    )
+    tour_ids = [r["tour_id"] for r in (tp.data or [])]
+    if not tour_ids:
+        return {"cleared": 0}
+    res = (
+        sb.table("houses")
+        .update(
+            {"latitude": None, "longitude": None, "geocoded_at": None}
+        )
+        .in_("tour_id", tour_ids)
+        .execute()
+    )
+    cleared = len(res.data or [])
+    log.info("regeocode cleared %d houses for user %s", cleared, user.id)
+    return {"cleared": cleared}
+
+
 @router.get("/houses/map", response_model=HouseMapResponse)
 def list_houses_for_map(
     background: BackgroundTasks,

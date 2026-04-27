@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 
 import { HousesMap } from "./houses-map";
+import { RegeocodeButton } from "./regeocode-button";
 
 export type HouseMapPin = {
   id: string;
@@ -83,20 +84,23 @@ export default async function MapPage() {
   return (
     <div className="space-y-5">
       {partial ? <RefreshOnVisibility /> : null}
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Map</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          {pins.length} of {total_houses}{" "}
-          {total_houses === 1 ? "house" : "houses"} pinned. Tap a marker to
-          jump to its brief.
-        </p>
-        {partial ? (
-          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-            Resolving {pending_geocode} more{" "}
-            {pending_geocode === 1 ? "address" : "addresses"} in the
-            background — refresh in a few seconds.
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Map</h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            {pins.length} of {total_houses}{" "}
+            {total_houses === 1 ? "house" : "houses"} pinned. Tap a marker to
+            jump to its brief.
           </p>
-        ) : null}
+          {partial ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              Resolving {pending_geocode} more{" "}
+              {pending_geocode === 1 ? "address" : "addresses"} in the
+              background — refresh in a few seconds.
+            </p>
+          ) : null}
+        </div>
+        <RegeocodeButton />
       </div>
       <HousesMap pins={pins} />
     </div>
