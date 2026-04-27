@@ -7,6 +7,7 @@ import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
+import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
@@ -85,19 +86,14 @@ export default async function HousePage({
         <div className="mt-1 flex items-start justify-between gap-3">
           <div className="min-w-0 flex items-center gap-3">
             {house.photo_signed_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={house.photo_signed_url}
-                alt=""
-                className="size-16 rounded-xl object-cover shrink-0 border border-zinc-200 dark:border-zinc-800"
-              />
+              <PhotoThumbnail src={house.photo_signed_url} />
             ) : null}
             <div className="min-w-0">
-              <h1 className="text-xl font-bold tracking-tight leading-tight">
+              <h1 className="text-base font-semibold tracking-tight leading-tight">
                 {house.address}
               </h1>
               {meta ? (
-                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-0.5">
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
                   {meta}
                 </p>
               ) : null}
