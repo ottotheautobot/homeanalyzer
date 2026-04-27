@@ -20,12 +20,14 @@ import logging
 import math
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import modal
 
 WEIGHTS_PATH = "/weights"
+MAST3R_PATH = "/opt/mast3r"
 weights_vol = modal.Volume.from_name("floorplan-weights", create_if_missing=True)
 
 floorplan_image = (
@@ -36,6 +38,7 @@ floorplan_image = (
         "libgl1-mesa-glx",
         "libglib2.0-0",
         "build-essential",
+        "cmake",
     )
     .pip_install(
         "torch==2.4.0",
@@ -43,6 +46,7 @@ floorplan_image = (
         "numpy<2.0",
         "scipy",
         "scikit-image",
+        "scikit-learn",
         "opencv-python-headless",
         "Pillow",
         "shapely",
@@ -54,6 +58,28 @@ floorplan_image = (
         "huggingface_hub",
         "safetensors",
         "einops",
+        # MASt3R needs these
+        "roma",
+        "matplotlib",
+        "tqdm",
+        "tensorboard",
+        "pyglet<2",
+        "huggingface-hub[torch]",
+    )
+    .run_commands(
+        f"git clone --recursive https://github.com/naver/mast3r {MAST3R_PATH}",
+        # MASt3R's own requirements.txt is light — most heavy deps already listed above.
+        # Skipping curope CUDA kernel build: pure-PyTorch fallback is plenty fast for 60 frames.
+        f"pip install -r {MAST3R_PATH}/requirements.txt || true",
+        f"pip install -r {MAST3R_PATH}/dust3r/requirements.txt || true",
+    )
+    .env(
+        {
+            "PYTHONPATH": (
+                f"{MAST3R_PATH}:{MAST3R_PATH}/dust3r:"
+                f"{MAST3R_PATH}/dust3r/croco"
+            )
+        }
     )
 )
 
@@ -111,7 +137,34 @@ def reconstruct_floor_plan(
     n = len(frames)
     frame_timestamps = [duration_s * (i + 0.5) / n for i in range(n)]
 
-    # Phase 2: per-frame metric depth via Depth Anything V2.
+    rooms_meta = (schematic or {}).get("rooms") or []
+    doors_meta = (schematic or {}).get("doors") or []
+
+    # Phase 3: try MASt3R first — full multi-view reconstruction.
+    try:
+        mast3r_out = _run_mast3r(frames, log)
+    except Exception as e:
+        log.exception("mast3r failed; will fall back to depth-only path")
+        mast3r_out = None
+
+    if mast3r_out is not None and rooms_meta:
+        try:
+            plan = _build_mast3r_plan(
+                mast3r_out, frame_timestamps, rooms_meta, doors_meta, log
+            )
+            plan["stats"] = {
+                "frames": len(frames),
+                "duration_s": duration_s,
+                "points_total": int(mast3r_out["n_points"]),
+                "rooms_with_data": sum(
+                    1 for r in plan["rooms"] if r.get("sample_count", 0) > 0
+                ),
+            }
+            return plan
+        except Exception as e:
+            log.exception("mast3r plan-build failed; falling back to depth-only")
+
+    # Phase 2 fallback: per-frame metric depth via Depth Anything V2.
     try:
         depth_results = _run_depth(frames, log)
     except Exception as e:
@@ -123,8 +176,6 @@ def reconstruct_floor_plan(
             stats={"frames": len(frames), "error": str(e)},
         )
 
-    # Group frames by room using schematic timestamps.
-    rooms_meta = (schematic or {}).get("rooms") or []
     if not rooms_meta:
         return _placeholder_plan(
             schematic,
@@ -133,14 +184,10 @@ def reconstruct_floor_plan(
             stats={"frames": len(frames)},
         )
 
-    # Compute per-room dimensions from the depth maps that fall in each room's
-    # time window.
     measured_rooms = _measure_rooms(
         rooms_meta, frame_timestamps, depth_results, log
     )
-
-    # Place rooms in 2D using schematic adjacency + measured sizes.
-    placed = _place_rooms(measured_rooms, (schematic or {}).get("doors") or [], log)
+    placed = _place_rooms(measured_rooms, doors_meta, log)
 
     return {
         "rooms": placed["rooms"],
@@ -149,9 +196,8 @@ def reconstruct_floor_plan(
         "confidence": "low",
         "notes": (
             "Reconstructed from monocular depth without camera tracking — "
-            "dimensions are approximate (~30-50% error). Layout follows the "
-            "schematic adjacency graph. Camera-tracked reconstruction is on "
-            "the v2 backlog."
+            "dimensions are approximate. Layout follows the schematic "
+            "adjacency graph (MASt3R reconstruction was unavailable)."
         ),
         "model_version": "depth-anything-v2.v1",
         "stats": {
@@ -292,6 +338,518 @@ def _probe_duration_safe(path: str) -> float:
         return float(out) if out else 1.0
     except Exception:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# MASt3R reconstruction (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _run_mast3r(frames: list[bytes], log) -> dict | None:
+    """Run MASt3R sparse global alignment on the sampled frames.
+
+    Returns a dict with:
+        pts3d:        list of (H, W, 3) float arrays in world coords (metric m)
+        confs:        list of (H, W) float arrays — per-point confidence
+        poses:        (N, 4, 4) camera-to-world poses
+        focals:       (N,) per-frame focal length in pixels
+        n_points:     total point count summed across frames
+    Coordinate convention: as returned by MASt3R — Y-down typically; we infer
+    the up-axis from the floor plane fit later.
+    """
+    import numpy as np
+    import torch
+
+    sys.path.insert(0, MAST3R_PATH)
+    sys.path.insert(0, f"{MAST3R_PATH}/dust3r")
+    sys.path.insert(0, f"{MAST3R_PATH}/dust3r/croco")
+    from dust3r.image_pairs import make_pairs  # type: ignore
+    from dust3r.utils.image import load_images  # type: ignore
+    from mast3r.cloud_opt.sparse_ga import sparse_global_alignment  # type: ignore
+    from mast3r.model import AsymmetricMASt3R  # type: ignore
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cache_dir = f"{WEIGHTS_PATH}/mast3r"
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ["HF_HOME"] = cache_dir
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", cache_dir)
+
+    log.info("loading MASt3R metric model on %s", device)
+    model = AsymmetricMASt3R.from_pretrained(
+        "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+    ).to(device)
+    model.eval()
+
+    with tempfile.TemporaryDirectory() as td:
+        # Write frame bytes to disk so dust3r's load_images() can find them.
+        paths = []
+        for i, fb in enumerate(frames):
+            p = os.path.join(td, f"f-{i:04d}.jpg")
+            with open(p, "wb") as f:
+                f.write(fb)
+            paths.append(p)
+
+        images = load_images(paths, size=512, verbose=False)
+        log.info("loaded %d images at 512px for MASt3R", len(images))
+
+        # Sliding window: each frame paired with its 3 neighbors on each side.
+        # For sequential video this is plenty — non-adjacent frames rarely
+        # have enough overlap to add useful constraints.
+        pairs = make_pairs(
+            images, scene_graph="swin-3", prefilter=None, symmetrize=True
+        )
+        log.info(
+            "built %d image pairs (swin-3 symmetrized) — running sparse global alignment",
+            len(pairs),
+        )
+
+        ga_cache = os.path.join(td, "ga_cache")
+        os.makedirs(ga_cache, exist_ok=True)
+        # MASt3R's sparse_global_alignment runs the pairwise forward pass
+        # internally (forward_mast3r) and then optimizes the global scene.
+        scene = sparse_global_alignment(
+            paths,
+            pairs,
+            ga_cache,
+            model,
+            lr1=0.07,
+            niter1=300,
+            lr2=0.014,
+            niter2=300,
+            device=device,
+            opt_depth=True,
+            shared_intrinsics=True,
+            matching_conf_thr=5.0,
+        )
+        log.info("global alignment complete")
+
+        # MASt3R returns dense per-frame pointmaps via get_dense_pts3d().
+        # Each call returns (pts3d_list, depths, confs). pts3d items are
+        # flat (N, 3) per frame; confs are aligned with pts3d (1D).
+        dense_pts, _depths, dense_confs = scene.get_dense_pts3d()
+        pts3d = [p.detach().cpu().numpy().reshape(-1, 3) for p in dense_pts]
+        confs = [c.detach().cpu().numpy().reshape(-1) for c in dense_confs]
+        poses = scene.cam2w.detach().cpu().numpy()
+        # intrinsics is a list of (3, 3) — pull focal from each.
+        focals = np.array(
+            [
+                float(intr[0, 0].detach().cpu().item())
+                for intr in scene.intrinsics
+            ]
+        )
+
+        n_points = sum(int(p.shape[0]) for p in pts3d)
+        log.info(
+            "scene: %d frames, %d total points, focal=%.1fpx",
+            len(pts3d),
+            n_points,
+            float(np.mean(focals)) if focals.ndim else float(focals),
+        )
+
+        # Free GPU memory before we leave the worker.
+        del scene
+        del model
+        torch.cuda.empty_cache()
+
+        return {
+            "pts3d": pts3d,
+            "confs": confs,
+            "poses": poses,
+            "focals": focals,
+            "n_points": n_points,
+        }
+
+
+def _build_mast3r_plan(
+    scene: dict,
+    frame_timestamps: list[float],
+    rooms_meta: list[dict],
+    doors_meta: list[dict],
+    log,
+) -> dict:
+    """Turn the MASt3R scene + schematic into a floor-plan dict in world
+    coordinates (XZ plane, meters)."""
+    import numpy as np
+
+    pts3d_list = scene["pts3d"]
+    confs_list = scene["confs"]
+    poses = scene["poses"]  # (N, 4, 4) cam-to-world
+    n_frames = len(pts3d_list)
+
+    # Concatenate all confident points for floor-plane fit.
+    all_pts = []
+    all_frame_idx = []
+    # MASt3R confidence: anything above 1.5 is reasonably reliable; demo uses 1.5
+    CONF_THR = 1.5
+    for i, (pts, conf) in enumerate(zip(pts3d_list, confs_list)):
+        flat_pts = pts.reshape(-1, 3)
+        flat_conf = conf.reshape(-1)
+        keep = flat_conf > CONF_THR
+        if not keep.any():
+            continue
+        kp = flat_pts[keep]
+        all_pts.append(kp)
+        all_frame_idx.append(np.full(kp.shape[0], i, dtype=np.int32))
+    if not all_pts:
+        raise RuntimeError("MASt3R returned no confident points")
+    all_pts = np.concatenate(all_pts, axis=0)
+    all_frame_idx = np.concatenate(all_frame_idx, axis=0)
+    log.info("aggregated %d confident 3D points across frames", all_pts.shape[0])
+
+    # Find floor plane + a "world rotation" that maps it to Z=0 with up=Z.
+    floor = _find_floor(all_pts, poses, log)
+    R_world = floor["R"]  # (3, 3) — rotation from MASt3R-world to floor-aligned-world
+    floor_z = floor["z"]  # offset along the new Z axis
+
+    # Apply rotation to all points + camera positions.
+    aligned_pts = (R_world @ all_pts.T).T
+    cam_centers = poses[:, :3, 3]  # (N, 3)
+    aligned_cams = (R_world @ cam_centers.T).T
+
+    # Subtract floor Z so floor sits at Z=0.
+    aligned_pts[:, 2] -= floor_z
+    aligned_cams[:, 2] -= floor_z
+
+    # Per-room: gather points whose contributing frames fall in the time
+    # window. Use only points 0.1m–2.2m above floor (drops floor + ceiling).
+    rooms_out = []
+    placement = {}
+    pad_s = 8.0  # seconds of pad on each side; schematic timestamps are noisy
+    for r in rooms_meta:
+        entered = r.get("entered_at")
+        exited = r.get("exited_at")
+        if entered is None or exited is None or exited <= entered:
+            log.info("room %s: no time window in schematic, skipping", r["id"])
+            rooms_out.append(_room_fallback(r, "missing schematic window"))
+            continue
+
+        win_lo = max(0.0, float(entered) - pad_s)
+        win_hi = float(exited) + pad_s
+        room_frames = [
+            i
+            for i, ts in enumerate(frame_timestamps)
+            if win_lo <= ts <= win_hi
+        ]
+        if len(room_frames) < 2:
+            # Nearest 3 frames to midpoint.
+            mid = (float(entered) + float(exited)) / 2
+            room_frames = sorted(
+                range(n_frames), key=lambda i: abs(frame_timestamps[i] - mid)
+            )[:3]
+
+        frame_set = set(room_frames)
+        mask = np.isin(all_frame_idx, np.array(list(frame_set), dtype=np.int32))
+        room_pts = aligned_pts[mask]
+
+        # Wall-height filter
+        if room_pts.shape[0] > 0:
+            z = room_pts[:, 2]
+            wall = (z > 0.1) & (z < 2.2)
+            room_pts = room_pts[wall]
+
+        # Camera positions from this window — used as a fallback / sanity anchor.
+        cam_pts = aligned_cams[room_frames]
+
+        if room_pts.shape[0] < 200:
+            log.info(
+                "room %s (%s): only %d wall-height points; using camera-trajectory fallback",
+                r["id"],
+                r["label"],
+                int(room_pts.shape[0]),
+            )
+            polygon, w_m, d_m = _bbox_from_camera_path(cam_pts[:, :2])
+            confidence = 0.3
+        else:
+            # Trim outliers with a coarse percentile clip then PCA-aligned bbox.
+            xy = room_pts[:, :2]
+            polygon, w_m, d_m = _oriented_bbox(xy)
+            confidence = 0.7 if len(room_frames) >= 4 else 0.5
+            log.info(
+                "room %s (%s): %d wall pts from %d frames -> %.2fx%.2fm",
+                r["id"],
+                r["label"],
+                int(room_pts.shape[0]),
+                len(room_frames),
+                w_m,
+                d_m,
+            )
+
+        rooms_out.append(
+            {
+                "id": r["id"],
+                "label": r["label"],
+                "polygon_m": [list(map(float, p)) for p in polygon],
+                "width_m": round(float(w_m), 2),
+                "depth_m": round(float(d_m), 2),
+                "confidence": float(confidence),
+                "sample_count": len(room_frames),
+            }
+        )
+        placement[r["id"]] = polygon
+
+    # Normalize so the global min is at origin.
+    rooms_out = _normalize_origin(rooms_out)
+
+    # Doors: place at midpoint of nearest-edges between connected room polygons.
+    doors_out = _place_doors(rooms_out, doors_meta)
+
+    confidence_label = "medium"
+    if all(r.get("confidence", 0) < 0.5 for r in rooms_out):
+        confidence_label = "low"
+    elif sum(1 for r in rooms_out if r.get("confidence", 0) >= 0.7) >= max(
+        1, len(rooms_out) // 2
+    ):
+        confidence_label = "high"
+
+    return {
+        "rooms": rooms_out,
+        "doors": doors_out,
+        "scale_m_per_unit": 1.0,
+        "confidence": confidence_label,
+        "notes": (
+            "Reconstructed from tour video via MASt3R sparse global alignment. "
+            "Per-room polygons are oriented bounding boxes of wall-height "
+            "points (0.1–2.2 m above floor). Dimensions in meters."
+        ),
+        "model_version": "mast3r-metric.v1",
+    }
+
+
+def _find_floor(all_pts, poses, log) -> dict:
+    """RANSAC plane fit on the lower portion of the point cloud, then build a
+    rotation matrix that maps the plane normal to +Z."""
+    import numpy as np
+    from sklearn.linear_model import RANSACRegressor
+
+    cam_centers = poses[:, :3, 3]
+    # MASt3R coordinate convention varies; assume cameras are above the floor.
+    # Find which axis has the largest signed-mean offset from the point cloud
+    # mean along the principal axes — the gravity axis. Heuristic: use the
+    # axis with the smallest variance in cam centers (since we walk laterally,
+    # not vertically). That's the "up" axis, and the floor is below cameras.
+    cam_var = np.var(cam_centers, axis=0)
+    up_axis = int(np.argmin(cam_var))
+    log.info("inferred up-axis = %d (cam variance %s)", up_axis, cam_var.tolist())
+
+    cam_up_med = float(np.median(cam_centers[:, up_axis]))
+    pt_up = all_pts[:, up_axis]
+
+    # Determine sign: floor should be on the side away from ceiling. Sample
+    # both directions and pick the one with denser points.
+    below = all_pts[pt_up < cam_up_med - 0.4]
+    above = all_pts[pt_up > cam_up_med + 0.4]
+    if len(below) > len(above):
+        floor_side = "below"
+        floor_candidates = below
+    else:
+        floor_side = "above"
+        floor_candidates = above
+    log.info(
+        "floor candidates: side=%s, n=%d (cam med up=%.2f)",
+        floor_side,
+        len(floor_candidates),
+        cam_up_med,
+    )
+
+    if len(floor_candidates) < 200:
+        # Degenerate — assume up = world up_axis, floor at min along up.
+        floor_z = float(np.percentile(pt_up, 5 if floor_side == "below" else 95))
+        n = np.zeros(3)
+        n[up_axis] = -1.0 if floor_side == "below" else 1.0
+        return {"R": _rotation_aligning(n, np.array([0, 0, 1.0])), "z": floor_z}
+
+    # Fit a plane: in the two non-up axes, predict the up coordinate.
+    other = [a for a in range(3) if a != up_axis]
+    X = floor_candidates[:, other]
+    y = floor_candidates[:, up_axis]
+    rs = RANSACRegressor(residual_threshold=0.15, max_trials=200)
+    rs.fit(X, y)
+    a, b = rs.estimator_.coef_
+    c = rs.estimator_.intercept_
+
+    # Plane: y = a*X[0] + b*X[1] + c, i.e. (a, b, -1) dot something + c = 0.
+    # Build the plane normal in 3D.
+    normal = np.zeros(3)
+    normal[other[0]] = a
+    normal[other[1]] = b
+    normal[up_axis] = -1.0
+    if floor_side == "above":
+        normal = -normal
+    normal /= np.linalg.norm(normal)
+
+    target_up = np.array([0, 0, 1.0])
+    R = _rotation_aligning(normal, target_up)
+
+    # Compute floor offset along new Z axis: take a representative inlier and
+    # rotate it.
+    rep = floor_candidates[rs.inlier_mask_][:1000].mean(axis=0)
+    floor_z = float((R @ rep)[2])
+
+    log.info(
+        "floor plane fit: normal=%s, z=%.3f, inliers=%d/%d",
+        normal.tolist(),
+        floor_z,
+        int(rs.inlier_mask_.sum()),
+        len(floor_candidates),
+    )
+    return {"R": R, "z": floor_z}
+
+
+def _rotation_aligning(src, dst):
+    """Rotation matrix that maps unit vector src to unit vector dst."""
+    import numpy as np
+
+    src = src / max(np.linalg.norm(src), 1e-9)
+    dst = dst / max(np.linalg.norm(dst), 1e-9)
+    v = np.cross(src, dst)
+    s = np.linalg.norm(v)
+    c = np.dot(src, dst)
+    if s < 1e-6:
+        return np.eye(3) if c > 0 else -np.eye(3)
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx * ((1 - c) / (s * s))
+
+
+def _oriented_bbox(xy):
+    """PCA-aligned bbox using 5/95 percentiles for outlier robustness.
+    Returns (polygon_world, width, depth)."""
+    import numpy as np
+
+    if len(xy) < 4:
+        return _bbox_from_camera_path(xy)
+
+    centroid = xy.mean(axis=0)
+    centered = xy - centroid
+    cov = np.cov(centered.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    # Order so first axis is dominant.
+    order = np.argsort(eigvals)[::-1]
+    R2 = eigvecs[:, order]  # (2, 2)
+
+    rotated = centered @ R2  # (N, 2)
+    # Use looser percentiles (2/98) — confident MASt3R points are already
+    # outlier-cleaned; clipping at 5/95 was throwing away legit walls.
+    lo = np.percentile(rotated, 2, axis=0)
+    hi = np.percentile(rotated, 98, axis=0)
+    span = hi - lo
+    # Inflate the bbox by 0.5 m on each side to account for the fact that
+    # cameras can't reach the actual wall surfaces — they capture detail near
+    # the wall plane but the bbox tends to underestimate the room.
+    pad = 0.5
+    lo = lo - pad
+    hi = hi + pad
+    span = hi - lo
+    box = np.array(
+        [
+            [lo[0], lo[1]],
+            [hi[0], lo[1]],
+            [hi[0], hi[1]],
+            [lo[0], hi[1]],
+        ]
+    )
+    box_world = box @ R2.T + centroid
+    return box_world.tolist(), float(span[0]), float(span[1])
+
+
+def _bbox_from_camera_path(cam_xy):
+    """Fallback: use camera-trajectory points + 1.5m inflation."""
+    import numpy as np
+
+    if len(cam_xy) == 0:
+        # Truly nothing — return a 3x3m placeholder
+        box = [[0, 0], [3, 0], [3, 3], [0, 3]]
+        return box, 3.0, 3.0
+    cam_xy = np.asarray(cam_xy)
+    if cam_xy.ndim == 1:
+        cam_xy = cam_xy.reshape(1, -1)
+    minXY = cam_xy.min(axis=0) - 1.5
+    maxXY = cam_xy.max(axis=0) + 1.5
+    w = float(maxXY[0] - minXY[0])
+    d = float(maxXY[1] - minXY[1])
+    w = max(2.5, w)
+    d = max(2.5, d)
+    cx = (minXY[0] + maxXY[0]) / 2
+    cy = (minXY[1] + maxXY[1]) / 2
+    box = [
+        [cx - w / 2, cy - d / 2],
+        [cx + w / 2, cy - d / 2],
+        [cx + w / 2, cy + d / 2],
+        [cx - w / 2, cy + d / 2],
+    ]
+    return box, w, d
+
+
+def _normalize_origin(rooms):
+    """Translate all polygons so the global min is at (0, 0). Returns plain
+    Python floats — no numpy leaks into the Modal return value."""
+    if not rooms:
+        return rooms
+    all_xs = [float(p[0]) for r in rooms for p in r["polygon_m"]]
+    all_ys = [float(p[1]) for r in rooms for p in r["polygon_m"]]
+    mx, my = min(all_xs), min(all_ys)
+    out = []
+    for r in rooms:
+        new_poly = [
+            [float(p[0]) - mx, float(p[1]) - my] for p in r["polygon_m"]
+        ]
+        nr = dict(r)
+        nr["polygon_m"] = new_poly
+        out.append(nr)
+    return out
+
+
+def _place_doors(rooms, doors_meta):
+    """For each schematic door, find the midpoint of the closest edge between
+    the two room polygons."""
+    import numpy as np
+
+    by_id = {r["id"]: np.array(r["polygon_m"]) for r in rooms}
+    out = []
+    seen = set()
+    for d in doors_meta:
+        a = by_id.get(d["from"])
+        b = by_id.get(d["to"])
+        if a is None or b is None:
+            continue
+        key = tuple(sorted([d["from"], d["to"]]))
+        if key in seen:
+            continue
+        seen.add(key)
+        # Closest pair of vertices
+        diffs = a[:, None, :] - b[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        ai, bi = np.unravel_index(int(np.argmin(dists)), dists.shape)
+        mid = (a[ai] + b[bi]) / 2
+        out.append(
+            {
+                "from": d["from"],
+                "to": d["to"],
+                "x_m": float(mid[0]),
+                "z_m": float(mid[1]),
+            }
+        )
+    return out
+
+
+def _room_fallback(r, reason):
+    M_PER_FT = 0.3048
+    w = float(r.get("width_ft") or 12) * M_PER_FT
+    d = float(r.get("depth_ft") or 12) * M_PER_FT
+    return {
+        "id": r["id"],
+        "label": r["label"],
+        "polygon_m": [[0, 0], [w, 0], [w, d], [0, d]],
+        "width_m": round(w, 2),
+        "depth_m": round(d, 2),
+        "confidence": 0.1,
+        "sample_count": 0,
+        "fallback_reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 (Depth Anything V2) — kept as a fallback path
+# ---------------------------------------------------------------------------
 
 
 def _run_depth(frames: list[bytes], log) -> list[dict]:
@@ -645,6 +1203,44 @@ def _placeholder_plan(
         "notes": notes,
         "model_version": "stub.v1",
         "stats": stats,
+    }
+
+
+@app.function(
+    image=floorplan_image,
+    gpu="A10G",
+    timeout=600,
+    volumes={WEIGHTS_PATH: weights_vol},
+    secrets=[
+        modal.Secret.from_name("huggingface", required_keys=["HF_TOKEN"]),
+    ],
+)
+def mast3r_smoke() -> dict:
+    """Verify MASt3R is installed and the metric model loads. Doesn't run
+    inference — just checks imports + weights download."""
+    log = _setup_logging()
+    sys.path.insert(0, MAST3R_PATH)
+    sys.path.insert(0, f"{MAST3R_PATH}/dust3r")
+    sys.path.insert(0, f"{MAST3R_PATH}/dust3r/croco")
+    log.info("importing mast3r...")
+    import torch  # noqa: F401
+    from mast3r.model import AsymmetricMASt3R  # type: ignore
+
+    cache_dir = f"{WEIGHTS_PATH}/mast3r"
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ["HF_HOME"] = cache_dir
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", cache_dir)
+    log.info("loading metric checkpoint...")
+    model_name = (
+        "naver/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric"
+    )
+    model = AsymmetricMASt3R.from_pretrained(model_name)
+    n_params = sum(p.numel() for p in model.parameters())
+    log.info("model loaded: %.1fM params", n_params / 1e6)
+    return {
+        "ok": True,
+        "params_m": n_params / 1e6,
+        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
     }
 
 
