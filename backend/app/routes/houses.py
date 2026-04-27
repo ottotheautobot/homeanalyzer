@@ -54,6 +54,7 @@ class HouseOut(BaseModel):
     photo_url: str | None
     photo_signed_url: str | None = None
     synthesis_md: str | None
+    floor_plan_json: dict | None = None
 
 
 class TranscriptOut(BaseModel):
@@ -318,3 +319,43 @@ def list_observations(
         .execute()
     )
     return [ObservationOut(**o) for o in res.data]
+
+
+@router.post("/houses/{house_id}/regenerate-floorplan", response_model=HouseOut)
+def regenerate_floor_plan(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> HouseOut:
+    """Re-run the schematic floor-plan generator for a completed house.
+    Useful for backfilling existing tours or iterating on the prompt."""
+    house = get_house_for_user(house_id, user.id)
+    sb = supabase()
+
+    transcripts = (
+        sb.table("transcripts")
+        .select("*")
+        .eq("house_id", house_id)
+        .order("start_seconds", desc=False)
+        .execute()
+    )
+    observations = (
+        sb.table("observations")
+        .select("*")
+        .eq("house_id", house_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    from app.llm.floor_plan import generate_floor_plan
+
+    plan = generate_floor_plan(
+        transcripts.data or [],
+        observations.data or [],
+        house.get("synthesis_md"),
+    )
+    res = (
+        sb.table("houses")
+        .update({"floor_plan_json": plan})
+        .eq("id", house_id)
+        .execute()
+    )
+    return _to_house_out(res.data[0])

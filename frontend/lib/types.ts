@@ -66,6 +66,29 @@ export type House = {
   photo_url: string | null;
   photo_signed_url: string | null;
   synthesis_md: string | null;
+  floor_plan_json: FloorPlan | null;
+};
+
+export type FloorPlanRoom = {
+  id: string;
+  label: string;
+  entered_at: number | null;
+  exited_at: number | null;
+  features: string[];
+};
+
+export type FloorPlanDoor = {
+  from: string;
+  to: string;
+  via: "sequence" | "transcript";
+};
+
+export type FloorPlan = {
+  rooms: FloorPlanRoom[];
+  doors: FloorPlanDoor[];
+  confidence: "low" | "medium" | "high";
+  notes: string | null;
+  model_version: string;
 };
 
 export type ObservationCategory =

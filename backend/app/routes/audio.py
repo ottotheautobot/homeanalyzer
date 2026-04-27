@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
 from app.llm.extract import extract_observations
+from app.llm.floor_plan import generate_floor_plan
 from app.llm.synthesize import synthesize_house
 from app.llm.whisper import transcribe
 from app.routes.houses import get_house_for_user
@@ -124,6 +125,18 @@ def _process_audio_upload(
             "overall_score": synthesis["overall_score"],
         }
     ).eq("id", house_id).execute()
+
+    # Schematic floor plan: lo-fi room+adjacency graph derived from the
+    # same inputs as synthesis. Failure here doesn't fail the tour — the
+    # brief is still useful without it.
+    try:
+        plan = generate_floor_plan(chunks, obs_res.data, synthesis["synthesis_md"])
+        sb.table("houses").update({"floor_plan_json": plan}).eq(
+            "id", house_id
+        ).execute()
+    except Exception as e:
+        log.exception("floor plan generation failed for house %s", house_id)
+        sentry_sdk.capture_exception(e)
 
 
 @router.post(

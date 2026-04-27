@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
+import { FloorPlanView } from "./floor-plan";
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
+import { RegenerateFloorPlan } from "./regenerate-floor-plan";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
@@ -168,6 +170,28 @@ export default async function HousePage({
           </CardHeader>
           <CardContent>
             <Synthesis markdown={house.synthesis_md} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {house.status === "completed" ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Layout</CardTitle>
+            <RegenerateFloorPlan
+              houseId={house.id}
+              hasPlan={!!house.floor_plan_json}
+            />
+          </CardHeader>
+          <CardContent>
+            {house.floor_plan_json ? (
+              <FloorPlanView plan={house.floor_plan_json} />
+            ) : (
+              <p className="text-sm text-zinc-500">
+                No layout sketch yet. Click Generate to build one from this
+                tour&apos;s transcript and observations.
+              </p>
+            )}
           </CardContent>
         </Card>
       ) : null}
