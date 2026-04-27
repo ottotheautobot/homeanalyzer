@@ -241,20 +241,35 @@ function VideoClip({
   timestamp: number;
 }) {
   // recall_timestamp from the vision pipeline pins to one frame, but the
-  // observation was extracted from a batch of ~30 frames — so the exact
-  // detail might land on neighboring sampled frames, not that one.
-  // Show a wider window (-2s to +5s) the user can scrub through.
+  // observation was extracted from a batch of ~30 frames — the detail
+  // can land on neighboring sampled frames. Show a -2s to +5s window the
+  // user can scrub.
+  //
+  // We can't trust the #t=start,end URL fragment to enforce the upper
+  // bound (Safari/iOS frequently ignores the end and plays through to
+  // the file's actual duration). Drive the window in JS instead: seek
+  // to start on loadedmetadata, and on timeupdate snap back to start
+  // whenever we've crossed end.
   const start = Math.max(0, timestamp - 2);
   const end = timestamp + 5;
   return (
     <video
-      src={`${videoUrl}#t=${start},${end}`}
+      src={videoUrl}
       autoPlay
       muted
       loop
       controls
       playsInline
       preload="metadata"
+      onLoadedMetadata={(e) => {
+        e.currentTarget.currentTime = start;
+      }}
+      onTimeUpdate={(e) => {
+        const t = e.currentTarget.currentTime;
+        if (t >= end || t < start - 0.25) {
+          e.currentTarget.currentTime = start;
+        }
+      }}
       className="w-full max-w-sm rounded-md border border-zinc-200 dark:border-zinc-800 bg-black"
     />
   );
