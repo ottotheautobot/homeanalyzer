@@ -203,7 +203,7 @@ def reconstruct_floor_plan(
             # Tag the model version with the primitive so we can filter rerun
             # candidates later without re-deriving from stats.
             plan["model_version"] = (
-                f"{primitive}-intrinsic.v2.2"
+                f"{primitive}-intrinsic.v2.3"
                 if primitive == "vggt"
                 else plan.get("model_version", "mast3r-intrinsic.v1.8")
             )
@@ -925,14 +925,20 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
 
 
 # Floors are considered distinct if the K-means cluster centers on camera Z
-# are at least this far apart (in scaled meters). Floor-to-floor in a typical
-# house is ~2.7m, but VGGT's scale calibration compresses this when the tour
-# spans both floors (the median camera height ends up between floors so the
-# 1.4m-target gets divided across both). 1.0m is a conservative threshold.
-_MULTI_STORY_MIN_GAP_M = 1.0
+# are at least this far apart (in scaled meters). Real floor-to-floor in a
+# typical house is ~2.7m; VGGT scale compression on multi-story tours makes
+# it land around 1.5-2.5m. 1.0m turned out to fire on single-story tours
+# where the user just looked up at ceilings and down at floors (creating
+# bimodal Z distribution within one floor). 1.8m is the v2.3 threshold.
+_MULTI_STORY_MIN_GAP_M = 1.8
 # Don't even try multi-story detection if the camera Z span is below this —
-# people don't walk up/down 1.5m on one floor.
-_MULTI_STORY_MIN_SPAN_M = 1.5
+# people don't walk up/down 2m on one floor.
+_MULTI_STORY_MIN_SPAN_M = 2.0
+# Each floor must have at least this many frames for the split to count.
+# Catches the case where the camera lifted briefly (e.g. looking up at a
+# vaulted ceiling) and a few stray frames pull a "second floor" out of a
+# single-story tour.
+_MULTI_STORY_MIN_FRAMES_PER_FLOOR = 5
 
 
 def _detect_floors(cam_z, log) -> list[dict]:
@@ -1003,9 +1009,31 @@ def _detect_floors(cam_z, log) -> list[dict]:
     if centers[0] > centers[1]:
         labels = 1 - labels
 
+    floor_idxs_lists = [
+        [i for i in range(n) if labels[i] == f] for f in (0, 1)
+    ]
+    # Reject the split if either cluster has too few frames — that's the
+    # signature of a single-story tour where the camera briefly lifted.
+    counts = [len(idxs) for idxs in floor_idxs_lists]
+    if min(counts) < _MULTI_STORY_MIN_FRAMES_PER_FLOOR:
+        log.info(
+            "multi-story rejected: smallest cluster has %d frames "
+            "< %d threshold (gap=%.2fm)",
+            min(counts),
+            _MULTI_STORY_MIN_FRAMES_PER_FLOOR,
+            gap,
+        )
+        return [
+            {
+                "floor_idx": 1,
+                "z_min": float(z.min()),
+                "z_max": float(z.max()),
+                "frame_indices": list(range(n)),
+            }
+        ]
+
     floors = []
-    for f in (0, 1):
-        idxs = [i for i in range(n) if labels[i] == f]
+    for f, idxs in enumerate(floor_idxs_lists):
         if not idxs:
             continue
         f_z = z[idxs]
@@ -1018,10 +1046,12 @@ def _detect_floors(cam_z, log) -> list[dict]:
             }
         )
     log.info(
-        "MULTI-STORY DETECTED: %d floors, gap=%.2fm, span=%.2fm",
+        "MULTI-STORY DETECTED: %d floors, gap=%.2fm, span=%.2fm, "
+        "frames_per_floor=%s",
         len(floors),
         gap,
         span,
+        counts,
     )
     return floors
 
