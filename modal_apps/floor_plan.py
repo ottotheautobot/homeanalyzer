@@ -65,6 +65,8 @@ floorplan_image = (
         "tensorboard",
         "pyglet<2",
         "huggingface-hub[torch]",
+        # Item 1: vision-labeling clusters via Claude Haiku
+        "anthropic>=0.40.0",
     )
     .run_commands(
         f"git clone --recursive https://github.com/naver/mast3r {MAST3R_PATH}",
@@ -96,6 +98,9 @@ app = modal.App("homeanalyzer-floorplan")
         modal.Secret.from_name(
             "supabase-service-role",
             required_keys=["SUPABASE_URL", "SUPABASE_SECRET_KEY"],
+        ),
+        modal.Secret.from_name(
+            "anthropic", required_keys=["ANTHROPIC_API_KEY"]
         ),
     ],
     cpu=4.0,
@@ -147,11 +152,11 @@ def reconstruct_floor_plan(
         log.exception("mast3r failed; will fall back to depth-only path")
         mast3r_out = None
 
-    if mast3r_out is not None and rooms_meta:
+    if mast3r_out is not None:
+        # Tier 1: intrinsic segmentation — cluster camera trajectory + label
+        # via Claude vision. Independent of the schematic's time windows.
         try:
-            plan = _build_mast3r_plan(
-                mast3r_out, frame_timestamps, rooms_meta, doors_meta, log
-            )
+            plan = _build_intrinsic_plan(mast3r_out, frames, log)
             plan["stats"] = {
                 "frames": len(frames),
                 "duration_s": duration_s,
@@ -159,10 +164,34 @@ def reconstruct_floor_plan(
                 "rooms_with_data": sum(
                     1 for r in plan["rooms"] if r.get("sample_count", 0) > 0
                 ),
+                "tier": "intrinsic",
             }
             return plan
-        except Exception as e:
-            log.exception("mast3r plan-build failed; falling back to depth-only")
+        except Exception:
+            log.exception(
+                "intrinsic segmentation failed; falling back to schematic-driven"
+            )
+
+        # Tier 2: schematic-driven (the v1.5 path). Uses room time windows.
+        if rooms_meta:
+            try:
+                plan = _build_mast3r_plan(
+                    mast3r_out, frame_timestamps, rooms_meta, doors_meta, log
+                )
+                plan["stats"] = {
+                    "frames": len(frames),
+                    "duration_s": duration_s,
+                    "points_total": int(mast3r_out["n_points"]),
+                    "rooms_with_data": sum(
+                        1 for r in plan["rooms"] if r.get("sample_count", 0) > 0
+                    ),
+                    "tier": "mast3r-schematic",
+                }
+                return plan
+            except Exception:
+                log.exception(
+                    "mast3r schematic plan failed; falling back to depth-only"
+                )
 
     # Phase 2 fallback: per-frame metric depth via Depth Anything V2.
     try:
@@ -458,6 +487,407 @@ def _run_mast3r(frames: list[bytes], log) -> dict | None:
             "focals": focals,
             "n_points": n_points,
         }
+
+
+# ---------------------------------------------------------------------------
+# Tier 1: intrinsic segmentation (no dependence on schematic time windows)
+# ---------------------------------------------------------------------------
+
+
+def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
+    """Segment + label rooms purely from MASt3R's reconstruction.
+
+    Pipeline:
+      1. Floor-plane fit + rotate so floor sits at Z=0.
+      2. Manhattan-axis alignment: rotate XY so the dominant wall direction
+         aligns with the X axis. Now all rooms share orientation.
+      3. Camera-trajectory clustering (DBSCAN on cam XY positions). Each
+         cluster ≈ one room.
+      4. Per cluster: gather points seen by frames in the cluster, filter to
+         wall heights, compute axis-aligned bbox in the Manhattan frame.
+      5. Vision-label each cluster's representative frame via Claude Haiku.
+      6. Door detection: trajectory crossings between cluster pairs.
+    """
+    import numpy as np
+
+    pts3d_list = scene["pts3d"]
+    confs_list = scene["confs"]
+    poses = scene["poses"]
+    n_frames = len(pts3d_list)
+
+    # Aggregate confident points + per-point frame attribution.
+    CONF_THR = 1.5
+    all_pts = []
+    all_frame_idx = []
+    for i, (pts, conf) in enumerate(zip(pts3d_list, confs_list)):
+        flat_pts = pts.reshape(-1, 3)
+        flat_conf = conf.reshape(-1)
+        keep = flat_conf > CONF_THR
+        if not keep.any():
+            continue
+        kp = flat_pts[keep]
+        all_pts.append(kp)
+        all_frame_idx.append(np.full(kp.shape[0], i, dtype=np.int32))
+    if not all_pts:
+        raise RuntimeError("MASt3R returned no confident points")
+    all_pts = np.concatenate(all_pts, axis=0)
+    all_frame_idx = np.concatenate(all_frame_idx, axis=0)
+
+    # 1. Floor plane fit + rotate to floor-up.
+    floor = _find_floor(all_pts, poses, log)
+    R_world = floor["R"]
+    floor_z = floor["z"]
+    aligned_pts = (R_world @ all_pts.T).T
+    aligned_pts[:, 2] -= floor_z
+    cam_centers = poses[:, :3, 3]
+    aligned_cams = (R_world @ cam_centers.T).T
+    aligned_cams[:, 2] -= floor_z
+
+    # 2. Manhattan alignment from wall-height points.
+    wall_mask = (aligned_pts[:, 2] > 0.3) & (aligned_pts[:, 2] < 2.4)
+    wall_xy = aligned_pts[wall_mask][:, :2]
+    R_man = _manhattan_rotation(wall_xy, log)
+    # Apply 2D rotation to all XY coords.
+    aligned_pts[:, :2] = aligned_pts[:, :2] @ R_man.T
+    aligned_cams[:, :2] = aligned_cams[:, :2] @ R_man.T
+    log.info("manhattan rotation applied")
+
+    # 3. Cluster cameras spatially.
+    clusters = _cluster_cameras(aligned_cams[:, :2], log)
+    if not clusters:
+        raise RuntimeError("camera clustering produced no clusters")
+    log.info("camera clustering -> %d clusters", len(clusters))
+
+    # 4. Per-cluster geometry: axis-aligned bbox of wall-height points seen
+    # by the cluster's frames.
+    cluster_frames = clusters  # dict: cluster_id -> list of frame indices
+    rooms_raw = []
+    for cid, frame_idxs in sorted(cluster_frames.items()):
+        if not frame_idxs:
+            continue
+        frame_set = np.array(frame_idxs, dtype=np.int32)
+        mask = np.isin(all_frame_idx, frame_set)
+        cpts = aligned_pts[mask]
+        if cpts.shape[0] > 0:
+            wh = (cpts[:, 2] > 0.1) & (cpts[:, 2] < 2.2)
+            cpts = cpts[wh]
+        cam_xy = aligned_cams[frame_idxs, :2]
+        if cpts.shape[0] >= 200:
+            polygon, w_m, d_m = _axis_aligned_bbox(cpts[:, :2])
+            confidence = 0.75 if len(frame_idxs) >= 4 else 0.5
+            source = "wall-points"
+        else:
+            polygon, w_m, d_m = _bbox_from_camera_path(cam_xy)
+            confidence = 0.3
+            source = "camera-path"
+        # pick representative frame: the one closest to the cluster centroid
+        centroid = cam_xy.mean(axis=0)
+        rep_local_idx = int(
+            np.argmin(np.linalg.norm(cam_xy - centroid, axis=1))
+        )
+        rep_frame_idx = frame_idxs[rep_local_idx]
+        log.info(
+            "cluster %d: %d frames, %d wall pts, source=%s, %.2fx%.2fm",
+            cid,
+            len(frame_idxs),
+            int(cpts.shape[0]),
+            source,
+            w_m,
+            d_m,
+        )
+        rooms_raw.append(
+            {
+                "cluster_id": cid,
+                "frame_indices": frame_idxs,
+                "polygon_m": polygon,
+                "width_m": round(float(w_m), 2),
+                "depth_m": round(float(d_m), 2),
+                "confidence": float(confidence),
+                "sample_count": len(frame_idxs),
+                "source": source,
+                "rep_frame_idx": rep_frame_idx,
+            }
+        )
+
+    if not rooms_raw:
+        raise RuntimeError("no rooms produced after clustering")
+
+    # 5. Vision-label each cluster.
+    labels = _label_clusters_via_vision(rooms_raw, frames, log)
+    rooms_out = []
+    for r, label in zip(rooms_raw, labels):
+        rooms_out.append(
+            {
+                "id": f"r{r['cluster_id']}",
+                "label": label,
+                "polygon_m": r["polygon_m"],
+                "width_m": r["width_m"],
+                "depth_m": r["depth_m"],
+                "confidence": r["confidence"],
+                "sample_count": r["sample_count"],
+                "source": r["source"],
+            }
+        )
+
+    # 6. Detect doors from trajectory crossings.
+    doors_out = _detect_doors_from_trajectory(
+        aligned_cams[:, :2], cluster_frames, rooms_out, log
+    )
+
+    # Normalize: shift rooms + doors so global min is at origin.
+    rooms_out, offset = _normalize_origin_with_offset(rooms_out)
+    for d in doors_out:
+        d["x_m"] = float(d["x_m"] - offset[0])
+        d["z_m"] = float(d["z_m"] - offset[1])
+
+    if all(r.get("confidence", 0) < 0.5 for r in rooms_out):
+        confidence_label = "low"
+    elif sum(1 for r in rooms_out if r.get("confidence", 0) >= 0.7) >= max(
+        1, len(rooms_out) // 2
+    ):
+        confidence_label = "high"
+    else:
+        confidence_label = "medium"
+
+    return {
+        "rooms": rooms_out,
+        "doors": doors_out,
+        "scale_m_per_unit": 1.0,
+        "confidence": confidence_label,
+        "notes": (
+            "Reconstructed from tour video via MASt3R + intrinsic camera-cluster "
+            "segmentation + vision labeling. Polygons are axis-aligned in a "
+            "Manhattan-rotated world frame so all rooms share wall orientation."
+        ),
+        "model_version": "mast3r-intrinsic.v1",
+    }
+
+
+def _manhattan_rotation(wall_xy, log):
+    """Rotation matrix (2x2) that aligns dominant wall direction with the
+    X axis. Uses a 1° histogram of point-to-point angles weighted by length."""
+    import numpy as np
+
+    if len(wall_xy) < 100:
+        log.info("manhattan: too few wall pts, skipping rotation")
+        return np.eye(2)
+
+    # Subsample for speed.
+    if len(wall_xy) > 50_000:
+        idx = np.random.choice(len(wall_xy), 50_000, replace=False)
+        sample = wall_xy[idx]
+    else:
+        sample = wall_xy
+
+    # PCA: dominant wall direction is the *minor* axis if walls form a long
+    # narrow cluster, or the *major* axis if room is elongated. Either way,
+    # we want walls (the dominant linear features in the point cloud) aligned
+    # with axes — and Manhattan worlds have walls along two perpendicular
+    # directions, so we just need to pick *one* of them.
+    centered = sample - sample.mean(axis=0)
+    cov = np.cov(centered.T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    # eigvecs[:, 1] is the major axis. Use it as the new X axis.
+    major = eigvecs[:, np.argmax(eigvals)]
+    angle = float(np.arctan2(major[1], major[0]))
+    # We rotate by -angle so the major axis lands on +X.
+    c, s = np.cos(-angle), np.sin(-angle)
+    R = np.array([[c, -s], [s, c]])
+    log.info("manhattan: dominant axis at %.1f°", np.degrees(angle))
+    return R
+
+
+def _cluster_cameras(cam_xy, log) -> dict[int, list[int]]:
+    """DBSCAN on camera XY positions. Returns cluster_id -> list of frame
+    indices. cluster_id starts at 0; -1 (noise) is skipped."""
+    import numpy as np
+    from sklearn.cluster import DBSCAN
+
+    n = len(cam_xy)
+    if n == 0:
+        return {}
+    # eps controls "what counts as the same room" — typical room is 3-5m, so
+    # 1.5m is generous enough to keep one room together but tight enough to
+    # split adjacent rooms.
+    db = DBSCAN(eps=1.5, min_samples=2).fit(cam_xy)
+    labels = db.labels_
+    clusters: dict[int, list[int]] = {}
+    for i, lab in enumerate(labels):
+        if lab < 0:
+            continue
+        clusters.setdefault(int(lab), []).append(i)
+
+    # If everything ended up as noise (rare — happens on very fast tours),
+    # fall back to time-segmented clustering: one cluster per contiguous
+    # block of N frames.
+    if not clusters:
+        log.info("DBSCAN returned all noise; falling back to time blocks")
+        block = max(3, n // 6)  # ~6 blocks
+        for i in range(n):
+            clusters.setdefault(i // block, []).append(i)
+    return clusters
+
+
+def _axis_aligned_bbox(xy):
+    """Tight axis-aligned bbox in the (already-Manhattan-rotated) frame.
+    Returns (polygon_4_corners, width, depth)."""
+    import numpy as np
+
+    if len(xy) < 4:
+        return _bbox_from_camera_path(xy)
+
+    lo = np.percentile(xy, 2, axis=0)
+    hi = np.percentile(xy, 98, axis=0)
+    pad = 0.4
+    lo = lo - pad
+    hi = hi + pad
+    w = float(hi[0] - lo[0])
+    d = float(hi[1] - lo[1])
+    box = [
+        [float(lo[0]), float(lo[1])],
+        [float(hi[0]), float(lo[1])],
+        [float(hi[0]), float(hi[1])],
+        [float(lo[0]), float(hi[1])],
+    ]
+    return box, w, d
+
+
+def _label_clusters_via_vision(rooms_raw, frames, log) -> list[str]:
+    """Send each cluster's representative frame to Claude Haiku and ask
+    'what room is this?'. Returns a label per cluster.
+
+    Falls back to "room N" if Anthropic key missing or call fails."""
+    import base64
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        log.warning("ANTHROPIC_API_KEY missing; using generic labels")
+        return [f"room {r['cluster_id'] + 1}" for r in rooms_raw]
+
+    try:
+        import anthropic
+    except ImportError:
+        log.warning("anthropic SDK not installed; using generic labels")
+        return [f"room {r['cluster_id'] + 1}" for r in rooms_raw]
+
+    client = anthropic.Anthropic(api_key=api_key)
+    out = []
+    valid_labels = {
+        "living",
+        "kitchen",
+        "dining",
+        "bedroom",
+        "bathroom",
+        "hallway",
+        "entryway",
+        "garage",
+        "office",
+        "laundry",
+        "closet",
+        "outdoor",
+        "stairs",
+        "other",
+    }
+    for r in rooms_raw:
+        rep_idx = r["rep_frame_idx"]
+        if rep_idx < 0 or rep_idx >= len(frames):
+            out.append(f"room {r['cluster_id'] + 1}")
+            continue
+        img_bytes = frames[rep_idx]
+        b64 = base64.standard_b64encode(img_bytes).decode("ascii")
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=20,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": b64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "This is one frame from a house tour video. "
+                                    "What kind of space is this? Reply with EXACTLY ONE "
+                                    "lowercase word from this list: "
+                                    "living, kitchen, dining, bedroom, bathroom, "
+                                    "hallway, entryway, garage, office, laundry, "
+                                    "closet, outdoor, stairs, other. "
+                                    "Reply with only the word, nothing else."
+                                ),
+                            },
+                        ],
+                    }
+                ],
+            )
+            raw = resp.content[0].text.strip().lower().split()[0]
+            label = raw if raw in valid_labels else f"room {r['cluster_id'] + 1}"
+        except Exception:
+            log.exception("vision label call failed for cluster %s", r["cluster_id"])
+            label = f"room {r['cluster_id'] + 1}"
+        out.append(label)
+        log.info("cluster %d -> '%s'", r["cluster_id"], label)
+    return out
+
+
+def _detect_doors_from_trajectory(cam_xy, cluster_frames, rooms_out, log):
+    """For each pair of clusters, if the camera trajectory crosses between
+    them in time order, mark a door at the midpoint of the crossing."""
+    import numpy as np
+
+    if len(rooms_out) < 2:
+        return []
+    # Build per-frame cluster id.
+    n = len(cam_xy)
+    frame_cluster = [-1] * n
+    cluster_to_idx = {}
+    for cid, frames in cluster_frames.items():
+        cluster_to_idx[cid] = next(
+            (i for i, r in enumerate(rooms_out) if r["id"] == f"r{cid}"), None
+        )
+        for fi in frames:
+            frame_cluster[fi] = cid
+
+    out = []
+    seen = set()
+    for i in range(1, n):
+        a = frame_cluster[i - 1]
+        b = frame_cluster[i]
+        if a < 0 or b < 0 or a == b:
+            continue
+        ai = cluster_to_idx.get(a)
+        bi = cluster_to_idx.get(b)
+        if ai is None or bi is None:
+            continue
+        from_id = rooms_out[ai]["id"]
+        to_id = rooms_out[bi]["id"]
+        key = tuple(sorted([from_id, to_id]))
+        if key in seen:
+            continue
+        seen.add(key)
+        midpoint = (cam_xy[i - 1] + cam_xy[i]) / 2
+        out.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "x_m": float(midpoint[0]),
+                "z_m": float(midpoint[1]),
+            }
+        )
+    log.info("detected %d doors from trajectory crossings", len(out))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: schematic-driven (kept as fallback)
+# ---------------------------------------------------------------------------
 
 
 def _build_mast3r_plan(
@@ -780,10 +1210,16 @@ def _bbox_from_camera_path(cam_xy):
 
 
 def _normalize_origin(rooms):
-    """Translate all polygons so the global min is at (0, 0). Returns plain
-    Python floats — no numpy leaks into the Modal return value."""
+    """Translate polygons so the global min is at (0, 0)."""
+    rooms_shifted, _ = _normalize_origin_with_offset(rooms)
+    return rooms_shifted
+
+
+def _normalize_origin_with_offset(rooms):
+    """Like _normalize_origin but also returns (offset_x, offset_y) for
+    callers that need to apply the same shift to other geometry."""
     if not rooms:
-        return rooms
+        return rooms, (0.0, 0.0)
     all_xs = [float(p[0]) for r in rooms for p in r["polygon_m"]]
     all_ys = [float(p[1]) for r in rooms for p in r["polygon_m"]]
     mx, my = min(all_xs), min(all_ys)
@@ -795,7 +1231,7 @@ def _normalize_origin(rooms):
         nr = dict(r)
         nr["polygon_m"] = new_poly
         out.append(nr)
-    return out
+    return out, (mx, my)
 
 
 def _place_doors(rooms, doors_meta):
