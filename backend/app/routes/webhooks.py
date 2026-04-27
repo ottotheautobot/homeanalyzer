@@ -383,6 +383,24 @@ def run_post_meeting_pipeline(house: dict, completion) -> None:
     # we have a video to feed it. Blocking would keep the webhook handler
     # busy for ~5 min; instead we schedule the same background task that the
     # manual button triggers via the measured_floorplan route.
+    #
+    # Surface every gate explicitly — silent skip on a misconfigured local
+    # env once cost us 5 floor plans we had to backfill manually.
+    skip_reasons = []
+    if not settings.enable_measured_floorplan:
+        skip_reasons.append("ENABLE_MEASURED_FLOORPLAN=false")
+    if not update.get("video_url"):
+        skip_reasons.append("no video_url (upload likely failed)")
+    if (update.get("video_duration_seconds") or 0) < 30:
+        skip_reasons.append(
+            f"duration={update.get('video_duration_seconds')} < 30s"
+        )
+    if skip_reasons:
+        log.warning(
+            "auto-trigger SKIPPED for measured floor plan house=%s: %s",
+            house_id,
+            "; ".join(skip_reasons),
+        )
     if (
         settings.enable_measured_floorplan
         and update.get("video_url")
