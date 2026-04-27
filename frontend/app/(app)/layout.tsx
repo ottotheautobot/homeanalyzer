@@ -1,4 +1,4 @@
-import { GitCompare, Home, LogOut } from "lucide-react";
+import { GitCompare, Home, LogOut, Settings } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -45,6 +45,14 @@ export default async function AppLayout({
               >
                 <GitCompare className="size-4" />
                 <span className="hidden sm:inline">Compare</span>
+              </Link>
+              <Link
+                href="/settings"
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
+                aria-label="Settings"
+              >
+                <Settings className="size-4" />
+                <span className="hidden sm:inline">Settings</span>
               </Link>
               <form action={signOut}>
                 <button
