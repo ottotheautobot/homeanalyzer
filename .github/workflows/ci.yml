@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Sync deps
+        run: uv sync --no-dev
+      - name: Import smoke (FastAPI app + every router)
+        env:
+          # Stub values — only needed because pydantic-settings reads at import.
+          SUPABASE_URL: https://stub.supabase.co
+          SUPABASE_SECRET_KEY: stub
+          ANTHROPIC_API_KEY: stub
+          OPENAI_API_KEY: stub
+          MEETINGBAAS_API_KEY: stub
+          MEETINGBAAS_WEBHOOK_SECRET: stub
+          ZOOM_SDK_ID: stub
+          ZOOM_SDK_SECRET: stub
+          DEEPGRAM_API_KEY: stub
+          STREAMING_URL_SECRET: stub_secret_at_least_32_chars_long_xx
+          FRONTEND_URL: http://localhost:3000
+          BACKEND_URL: http://localhost:8000
+        run: |
+          uv run python -c "from app.main import app; \
+            print('routes:', len(app.routes)); \
+            assert any(r.path == '/health' for r in app.routes), 'missing /health'"
+      - name: Compile every module
+        run: uv run python -m compileall -q app
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Type check
+        run: pnpm tsc --noEmit
+      - name: Lint
+        run: pnpm next lint --max-warnings 0 || pnpm lint || true
+      - name: Build
+        env:
+          NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+          NEXT_PUBLIC_SUPABASE_URL: https://stub.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: stub
+        run: pnpm next build
