@@ -167,6 +167,87 @@ def list_all_houses(
     return [_to_house_out(h) for h in res.data or []]
 
 
+class HouseMapPin(BaseModel):
+    id: str
+    tour_id: str
+    address: str
+    latitude: float
+    longitude: float
+    overall_score: float | None
+    status: str
+    photo_signed_url: str | None
+
+
+@router.get("/houses/map", response_model=list[HouseMapPin])
+def list_houses_for_map(
+    user: AuthUser = Depends(current_user),
+    geocode_missing: bool = True,
+) -> list[HouseMapPin]:
+    """Return every house the user can see, with lat/lng. Lazily geocodes
+    rows that don't have coords yet via Nominatim (slow, ~1s per house) and
+    persists the result. Skips houses whose address can't be resolved."""
+    from datetime import datetime, timezone
+
+    from app.services.geocode import geocode_address
+
+    sb = supabase()
+    tp = (
+        sb.table("tour_participants")
+        .select("tour_id")
+        .eq("user_id", user.id)
+        .execute()
+    )
+    tour_ids = [r["tour_id"] for r in (tp.data or [])]
+    if not tour_ids:
+        return []
+    res = (
+        sb.table("houses")
+        .select(
+            "id, tour_id, address, latitude, longitude, geocoded_at, "
+            "overall_score, status, photo_signed_url"
+        )
+        .in_("tour_id", tour_ids)
+        .execute()
+    )
+    rows = res.data or []
+    pins: list[HouseMapPin] = []
+    now = datetime.now(timezone.utc).isoformat()
+    for h in rows:
+        lat = h.get("latitude")
+        lng = h.get("longitude")
+        if (lat is None or lng is None) and geocode_missing and h.get("address"):
+            coords = geocode_address(h["address"])
+            if coords is not None:
+                lat, lng = coords
+                sb.table("houses").update(
+                    {
+                        "latitude": lat,
+                        "longitude": lng,
+                        "geocoded_at": now,
+                    }
+                ).eq("id", h["id"]).execute()
+            else:
+                # Mark attempted so we don't retry every request.
+                sb.table("houses").update({"geocoded_at": now}).eq(
+                    "id", h["id"]
+                ).execute()
+        if lat is None or lng is None:
+            continue
+        pins.append(
+            HouseMapPin(
+                id=h["id"],
+                tour_id=h["tour_id"],
+                address=h["address"],
+                latitude=float(lat),
+                longitude=float(lng),
+                overall_score=h.get("overall_score"),
+                status=h.get("status") or "upcoming",
+                photo_signed_url=h.get("photo_signed_url"),
+            )
+        )
+    return pins
+
+
 @router.get("/tours/{tour_id}/houses", response_model=list[HouseOut])
 def list_houses(
     tour_id: str, user: AuthUser = Depends(current_user)

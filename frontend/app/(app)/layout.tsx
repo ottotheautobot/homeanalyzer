@@ -1,4 +1,4 @@
-import { GitCompare, Home, LogOut, Settings } from "lucide-react";
+import { GitCompare, Home, LogOut, Map as MapIcon, Settings } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -39,6 +39,13 @@ export default async function AppLayout({
               </span>
             </Link>
             <nav className="flex items-center gap-1">
+              <Link
+                href="/map"
+                className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
+              >
+                <MapIcon className="size-4" />
+                <span className="hidden sm:inline">Map</span>
+              </Link>
               <Link
                 href="/compare"
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
