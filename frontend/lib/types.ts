@@ -80,6 +80,8 @@ export type MeasuredFloorPlanRoom = {
   width_m: number;
   depth_m: number;
   confidence: number;
+  sample_count?: number;
+  source?: "wall-points" | "camera-path" | string;
 };
 
 export type MeasuredFloorPlanDoor = {

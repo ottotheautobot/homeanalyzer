@@ -133,6 +133,9 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
             }
             cx /= room.polygon_m.length;
             cy /= room.polygon_m.length;
+            // Per-room confidence drives visual treatment so user knows
+            // which dimensions to trust at a glance.
+            const lowConf = room.confidence < 0.5;
             return (
               <g
                 key={room.id}
@@ -144,9 +147,11 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
                 <polygon
                   points={points}
                   fill={palette.fill}
+                  fillOpacity={lowConf ? 0.4 : 1}
                   stroke={palette.stroke}
                   strokeWidth={isSelected ? 3 : 2}
                   strokeLinejoin="round"
+                  strokeDasharray={lowConf ? "6 4" : undefined}
                 />
                 <text
                   x={cx}
@@ -156,6 +161,7 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
                   fontWeight={600}
                   fill={palette.text}
                   style={{ textTransform: "capitalize" }}
+                  opacity={lowConf ? 0.6 : 1}
                 >
                   {room.label}
                 </text>
@@ -165,10 +171,11 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
                   textAnchor="middle"
                   fontSize={10}
                   fill={palette.text}
-                  opacity={0.75}
+                  opacity={lowConf ? 0.45 : 0.75}
                 >
                   {metersToFeet(room.width_m).toFixed(0)}×
                   {metersToFeet(room.depth_m).toFixed(0)} ft
+                  {lowConf ? " ?" : ""}
                 </text>
               </g>
             );
@@ -191,7 +198,7 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
       </div>
 
       {selected ? (
-        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3">
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 space-y-1.5">
           <h3 className="text-sm font-semibold capitalize">
             {selected.label}{" "}
             <span className="ml-2 text-xs text-zinc-500 font-normal">
@@ -200,10 +207,36 @@ export function MeasuredFloorPlanView({ plan }: { plan: MeasuredFloorPlan }) {
               {selected.width_m.toFixed(1)}×{selected.depth_m.toFixed(1)} m)
             </span>
           </h3>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+            <span>
+              Confidence{" "}
+              <span
+                className={
+                  selected.confidence >= 0.7
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : selected.confidence >= 0.5
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-zinc-500"
+                }
+              >
+                {(selected.confidence * 100).toFixed(0)}%
+              </span>
+            </span>
+            {typeof selected.sample_count === "number" ? (
+              <span>{selected.sample_count} frames</span>
+            ) : null}
+            {selected.source === "camera-path" ? (
+              <span className="text-amber-600 dark:text-amber-400">
+                Rough estimate (sparse coverage)
+              </span>
+            ) : selected.source === "wall-points" ? (
+              <span>Wall-point bbox</span>
+            ) : null}
+          </div>
         </div>
       ) : (
         <p className="text-xs text-zinc-500 text-center">
-          Tap a room to see measurements.
+          Tap a room to see measurements. Dashed outlines = rough estimates.
         </p>
       )}
     </div>

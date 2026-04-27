@@ -8,7 +8,9 @@ Hours 3-8.
 
 import json
 import logging
+import threading
 import time
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
@@ -259,6 +261,60 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
 
     log.info("_finalize running whisper pipeline bot=%s", bot_id)
     _process_audio_upload(house_id, audio_bytes, "audio/wav", "wav")
+
+    # Measured floor plan: fire-and-forget on Modal if the feature is on and
+    # we have a video to feed it. Blocking would keep the webhook handler
+    # busy for ~5 min; instead we schedule the same background task that the
+    # manual button triggers via the measured_floorplan route.
+    if (
+        settings.enable_measured_floorplan
+        and update.get("video_url")
+        and update.get("video_duration_seconds", 0) >= 30
+    ):
+        try:
+            from app.routes.measured_floorplan import _run_modal_job
+
+            # Re-read the schematic from DB — synthesis just wrote it.
+            fresh = (
+                sb.table("houses")
+                .select("floor_plan_json,video_url")
+                .eq("id", house_id)
+                .single()
+                .execute()
+            )
+            schematic = (fresh.data or {}).get("floor_plan_json")
+
+            sb.table("houses").update(
+                {
+                    "measured_floor_plan_status": "pending",
+                    "measured_floor_plan_error": None,
+                    "measured_floor_plan_started_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                }
+            ).eq("id", house_id).execute()
+            # _run_modal_job blocks until Modal returns the result (~5-10 min)
+            # so spawn it in a daemon thread to keep the webhook handler free.
+            t = threading.Thread(
+                target=_run_modal_job,
+                kwargs={
+                    "house_id": house_id,
+                    "video_storage_path": update["video_url"],
+                    "schematic": schematic,
+                },
+                daemon=True,
+            )
+            t.start()
+            log.info(
+                "_finalize spawned measured floor-plan job house=%s "
+                "(schematic_rooms=%d)",
+                house_id,
+                len((schematic or {}).get("rooms") or []),
+            )
+        except Exception as e:
+            log.exception("failed to spawn measured floor-plan job house=%s", house_id)
+            sentry_sdk.capture_exception(e)
+
     state.drop(bot_id)
 
 
