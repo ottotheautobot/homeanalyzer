@@ -714,17 +714,35 @@ def _manhattan_rotation(wall_xy, log):
 
 def _cluster_cameras(cam_xy, log) -> dict[int, list[int]]:
     """DBSCAN on camera XY positions. Returns cluster_id -> list of frame
-    indices. cluster_id starts at 0; -1 (noise) is skipped."""
+    indices. cluster_id starts at 0; -1 (noise) is skipped.
+
+    eps is adaptive: scales with the average inter-frame step. A user
+    walking fast has bigger steps and needs bigger eps to keep frames in
+    the same cluster; a user dwelling has small steps and benefits from
+    tighter eps that splits adjacent rooms more aggressively."""
     import numpy as np
     from sklearn.cluster import DBSCAN
 
     n = len(cam_xy)
     if n == 0:
         return {}
-    # eps controls "what counts as the same room" — typical room is 3-5m, so
-    # 1.5m is generous enough to keep one room together but tight enough to
-    # split adjacent rooms.
-    db = DBSCAN(eps=1.5, min_samples=2).fit(cam_xy)
+    # Median per-step distance: characteristic frame-to-frame motion.
+    # eps = max(1.2, 3 * median_step) bounds the floor at 1.2m so very
+    # slow tours don't split single rooms, and lets eps grow naturally
+    # with pace.
+    if n >= 2:
+        steps = np.linalg.norm(np.diff(cam_xy, axis=0), axis=1)
+        median_step = float(np.median(steps[np.isfinite(steps) & (steps > 0)]) or 0.5)
+    else:
+        median_step = 0.5
+    eps = float(np.clip(3.0 * median_step, 1.2, 3.0))
+    log.info(
+        "DBSCAN: median_step=%.2fm -> eps=%.2fm (n=%d)",
+        median_step,
+        eps,
+        n,
+    )
+    db = DBSCAN(eps=eps, min_samples=2).fit(cam_xy)
     labels = db.labels_
     clusters: dict[int, list[int]] = {}
     for i, lab in enumerate(labels):
