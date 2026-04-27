@@ -169,11 +169,13 @@ export default async function HousePage({
       </Card>
 
       {/* Recovery affordance: bot ran but post-meeting pipeline didn't
-          land — no audio, no synthesis, no observations. Surfaces
+          land — no audio, no synthesis. Stuck rows usually sit at
+          status=synthesizing (the original webhook crashed before flipping
+          to completed) but we also catch completed-without-data. Surfaces
           retry-finalize, which only works while MB still has the recording. */}
       {house.bot_id &&
-      house.status === "completed" &&
-      !house.audio_url &&
+      (house.status === "synthesizing" ||
+        (house.status === "completed" && !house.audio_url)) &&
       !house.synthesis_md ? (
         <RetryFinalize houseId={house.id} />
       ) : null}
