@@ -87,62 +87,55 @@ class MeetingBaasProvider(MeetingProvider):
         r.raise_for_status()
 
     async def get_bot(self, bot_id: str) -> CompletionPayload | None:
-        """GET /bots/{bot_id}/data — returns the bot's current data including
-        signed recording URLs (4h S3 TTL on MB v1). Returns None if MB has
-        no recording for this bot (404, recording purged, bot still running).
+        """GET /bots/meeting_data?bot_id=<id> — returns recording URLs +
+        bot metadata + transcripts. URLs are presigned S3 with a 4h TTL.
+
+        Response shape (verified on v1):
+            {
+              "bot_data": {"bot": {...metadata...}, "transcripts": [...]},
+              "mp4": "https://...s3...mp4?...",
+              "audio": "https://...s3...wav?...",
+              "duration": float
+            }
+
+        Returns None if MB has no recording (404, purged, bot never finished).
         """
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(
-                f"{API_BASE}/bots/{bot_id}/data",
+                f"{API_BASE}/bots/meeting_data",
+                params={"bot_id": bot_id},
                 headers={AUTH_HEADER: settings.meetingbaas_api_key},
             )
         if r.status_code == 404:
             return None
         if r.status_code >= 400:
             log.error(
-                "meetingbaas get_bot failed: %s %s", r.status_code, r.text
+                "meetingbaas get_bot failed: %s %s", r.status_code, r.text[:300]
             )
             r.raise_for_status()
         body = r.json()
-        # MB's GET shape varies between API versions. Walk a few common
-        # spots so we tolerate v1 quirks without crashing the recovery path.
-        candidate_blocks = [
-            body,
-            body.get("data") if isinstance(body, dict) else None,
-            body.get("bot_data") if isinstance(body, dict) else None,
-            body.get("bot") if isinstance(body, dict) else None,
-        ]
-        for block in candidate_blocks:
-            if not isinstance(block, dict):
-                continue
-            audio = (
-                block.get("audio_url")
-                or block.get("audio")
-                or block.get("mp3_url")
+        if not isinstance(body, dict):
+            log.warning("get_bot %s returned non-dict body: %s", bot_id, type(body))
+            return None
+        audio = body.get("audio") or body.get("audio_url")
+        video = body.get("mp4") or body.get("video_url") or body.get("mp4_url")
+        # Transcripts come back inline (not as a URL) in the meeting_data
+        # response — leave transcript_url None and let our Whisper pipeline
+        # generate transcripts from audio.
+        if not (audio or video):
+            log.warning(
+                "get_bot for %s returned no recording URLs; keys=%s",
+                bot_id,
+                list(body.keys()),
             )
-            video = (
-                block.get("mp4_url")
-                or block.get("mp4")
-                or block.get("video_url")
-            )
-            transcript = (
-                block.get("transcript_url")
-                or block.get("transcription")
-            )
-            if audio or video or transcript:
-                return CompletionPayload(
-                    bot_id=str(bot_id),
-                    duration_seconds=block.get("duration_seconds"),
-                    audio_url=audio,
-                    video_url=video,
-                    transcript_url=transcript,
-                )
-        log.warning(
-            "get_bot for %s returned no recording URLs; raw keys=%s",
-            bot_id,
-            list(body.keys()) if isinstance(body, dict) else type(body).__name__,
+            return None
+        return CompletionPayload(
+            bot_id=str(bot_id),
+            duration_seconds=body.get("duration"),
+            audio_url=audio,
+            video_url=video,
+            transcript_url=None,
         )
-        return None
 
     def verify_webhook_signature(self, headers: dict, body: bytes) -> bool:
         if not settings.meetingbaas_webhook_secret:

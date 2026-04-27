@@ -46,3 +46,7 @@ Thumbs.db
 
 # Claude Code per-machine settings + session artifacts
 .claude/
+
+# Throwaway recovery scripts (run from local CLI against prod, never deploy)
+backend/recover.py
+backend/recover_*.py
