@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
-import { mergeMeasuredIntoSchematic } from "@/lib/floor-plan-merge";
+import { mergeFloorPlans } from "@/lib/floor-plan-merge";
 
 import { FloorPlanView } from "./floor-plan";
 import { LiveTour } from "./live-tour";
@@ -203,20 +203,20 @@ export default async function HousePage({
                 house.measured_floor_plan_json &&
                 house.measured_floor_plan_status === "ready" &&
                 house.measured_floor_plan_json.rooms?.length;
-              if (measuredReady) {
-                // One renderer (schematic-style: rectangles + labels +
-                // dimensions + door gaps) but powered by measured data
-                // when we have it. Schematic provides per-room features
-                // (transcript-derived) when labels match.
-                const merged = mergeMeasuredIntoSchematic(
-                  house.measured_floor_plan_json!,
-                  house.floor_plan_json,
-                );
-                return <FloorPlanView plan={merged} source="measured" />;
-              }
-              if (house.floor_plan_json) {
+              // True union: schematic's room list is canonical, measured
+              // overrides dimensions where labels match, vision-only rooms
+              // get appended. Each room carries a `source` tag so the
+              // renderer can show which numbers came from where.
+              const merged = mergeFloorPlans(
+                measuredReady ? house.measured_floor_plan_json : null,
+                house.floor_plan_json,
+              );
+              if (merged && merged.rooms.length > 0) {
                 return (
-                  <FloorPlanView plan={house.floor_plan_json} source="schematic" />
+                  <FloorPlanView
+                    plan={merged}
+                    source={measuredReady ? "measured" : "schematic"}
+                  />
                 );
               }
               return (

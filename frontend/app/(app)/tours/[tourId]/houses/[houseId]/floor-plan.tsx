@@ -4,6 +4,12 @@ import { useMemo, useState } from "react";
 
 import type { FloorPlan, FloorPlanRoom } from "@/lib/types";
 
+type RoomSource = "verified" | "estimate" | "vision-only";
+
+type RoomWithSource = FloorPlanRoom & { source?: RoomSource };
+
+type AnyPlan = Omit<FloorPlan, "rooms"> & { rooms: RoomWithSource[] };
+
 const CONFIDENCE_PILL: Record<
   FloorPlan["confidence"],
   { label: string; cls: string }
@@ -54,7 +60,7 @@ type Placement = {
   w: number;
   h: number;
   idx: number;
-} & FloorPlanRoom;
+} & RoomWithSource;
 
 type Layout = {
   rooms: Placement[];
@@ -76,7 +82,7 @@ type Layout = {
  * lets rooms have honest-ish dimensions while still tiling cleanly so it
  * reads as a floor plan instead of a flowchart.
  */
-function placeRooms(plan: FloorPlan): Layout {
+function placeRooms(plan: AnyPlan): Layout {
   if (plan.rooms.length === 0) {
     return { rooms: [], doors: [], width: 0, height: 0 };
   }
@@ -240,11 +246,12 @@ export function FloorPlanView({
   plan,
   source = "schematic",
 }: {
-  plan: FloorPlan;
-  /** "measured" when the plan is fed by the MASt3R/VGGT pipeline (real
-   *  per-room dimensions); "schematic" when it's the LLM-estimated
-   *  Sonnet output. Changes the disclaimer banner + drops the `≈`
-   *  prefix on per-room dimensions. */
+  plan: FloorPlan | AnyPlan;
+  /** "measured" when the plan was fed from a merge that included real
+   *  measured dimensions for at least some rooms; "schematic" when it's
+   *  pure LLM estimate. Per-room provenance can also be on each room
+   *  via `room.source` (verified/estimate/vision-only) — the per-room
+   *  tag overrides the global one for that room's annotation. */
   source?: "schematic" | "measured";
 }) {
   const layout = useMemo(() => placeRooms(plan), [plan]);
@@ -299,9 +306,15 @@ export function FloorPlanView({
           {layout.rooms.map((room) => {
             const palette = ROOM_PALETTE[room.idx % ROOM_PALETTE.length];
             const isSelected = room.id === selectedId;
+            // Per-room source tag from a merged plan; falls back to the
+            // global `source` prop when not present.
+            const roomSource: RoomSource =
+              room.source ??
+              (isMeasured ? "verified" : "estimate");
+            const isVerified = roomSource === "verified";
             const dim =
               room.width_ft && room.depth_ft
-                ? isMeasured
+                ? isVerified
                   ? `${room.width_ft}×${room.depth_ft}′`
                   : `≈${room.width_ft}×${room.depth_ft}′`
                 : null;
@@ -319,8 +332,16 @@ export function FloorPlanView({
                   width={room.w}
                   height={room.h}
                   fill={palette.fill}
+                  fillOpacity={roomSource === "vision-only" ? 0.55 : 1}
                   stroke={palette.stroke}
                   strokeWidth={isSelected ? 3 : 2}
+                  strokeDasharray={
+                    roomSource === "estimate"
+                      ? "6 4"
+                      : roomSource === "vision-only"
+                        ? "2 3"
+                        : undefined
+                  }
                 />
                 <text
                   x={room.pxX + room.w / 2}
@@ -369,9 +390,13 @@ export function FloorPlanView({
             {selected.label}
             {selected.width_ft && selected.depth_ft ? (
               <span className="ml-2 text-xs text-zinc-500 font-normal">
-                {isMeasured ? "" : "≈ "}
+                {selected.source === "verified" ? "" : "≈ "}
                 {selected.width_ft}×{selected.depth_ft} ft
-                {isMeasured ? " (measured)" : " (estimate)"}
+                {selected.source === "verified"
+                  ? " (measured)"
+                  : selected.source === "vision-only"
+                    ? " (camera saw, transcript missed)"
+                    : " (estimate)"}
               </span>
             ) : null}
           </h3>
