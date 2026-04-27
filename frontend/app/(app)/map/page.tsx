@@ -1,3 +1,4 @@
+import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 
@@ -14,12 +15,20 @@ export type HouseMapPin = {
   photo_signed_url: string | null;
 };
 
-export default async function MapPage() {
-  // First load can be slow because Nominatim is rate-limited at ~1 req/s
-  // for any rows missing coords. Subsequent loads are fast (cached).
-  const pins = await serverFetch<HouseMapPin[]>("/houses/map");
+type HouseMapResponse = {
+  pins: HouseMapPin[];
+  total_houses: number;
+  pending_geocode: number;
+};
 
-  if (pins.length === 0) {
+export default async function MapPage() {
+  // The backend caps synchronous geocoding to a few houses per request and
+  // pushes the rest into background tasks; we refresh on visibility so the
+  // map fills in without a hard reload.
+  const data = await serverFetch<HouseMapResponse>("/houses/map");
+  const { pins, total_houses, pending_geocode } = data;
+
+  if (total_houses === 0) {
     return (
       <div className="space-y-5">
         <div>
@@ -30,12 +39,11 @@ export default async function MapPage() {
         </div>
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">No locatable houses</CardTitle>
+            <CardTitle className="text-base">No houses yet</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-zinc-500">
-              Add houses with full street addresses (city + state helps).
-              Locations are auto-resolved on first view.
+              Add a house from a tour and it&apos;ll appear here.
             </p>
           </CardContent>
         </Card>
@@ -43,14 +51,52 @@ export default async function MapPage() {
     );
   }
 
+  if (pins.length === 0) {
+    return (
+      <div className="space-y-5">
+        <RefreshOnVisibility />
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Map</h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            Resolving {total_houses}{" "}
+            {total_houses === 1 ? "address" : "addresses"} to coordinates…
+            this page auto-refreshes when you come back to it.
+          </p>
+        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Geocoding in progress</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-zinc-500">
+              First load only — coordinates cache afterwards. Try refreshing in
+              ~{Math.max(15, total_houses * 2)} seconds.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const partial = pending_geocode > 0;
+
   return (
     <div className="space-y-5">
+      {partial ? <RefreshOnVisibility /> : null}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Map</h1>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          {pins.length} {pins.length === 1 ? "house" : "houses"} pinned. Tap a
-          marker to jump to its brief.
+          {pins.length} of {total_houses}{" "}
+          {total_houses === 1 ? "house" : "houses"} pinned. Tap a marker to
+          jump to its brief.
         </p>
+        {partial ? (
+          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+            Resolving {pending_geocode} more{" "}
+            {pending_geocode === 1 ? "address" : "addresses"} in the
+            background — refresh in a few seconds.
+          </p>
+        ) : null}
       </div>
       <HousesMap pins={pins} />
     </div>

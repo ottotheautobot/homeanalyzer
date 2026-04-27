@@ -6,6 +6,7 @@ from uuid import uuid4
 import sentry_sdk
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -179,14 +180,48 @@ class HouseMapPin(BaseModel):
     photo_signed_url: str | None
 
 
-@router.get("/houses/map", response_model=list[HouseMapPin])
+class HouseMapResponse(BaseModel):
+    pins: list[HouseMapPin]
+    total_houses: int
+    pending_geocode: int
+
+
+# Hard cap on synchronous geocoding per request — Nominatim is rate-limited
+# to ~1 req/s, and Vercel SSR functions time out at 10 s by default.
+_MAX_SYNC_GEOCODE = 2
+
+
+def _geocode_house(house_id: str, address: str) -> None:
+    """Background-task entry point: geocode one house and persist the result."""
+    from datetime import datetime, timezone
+
+    from app.services.geocode import geocode_address
+
+    coords = geocode_address(address)
+    sb = supabase()
+    now = datetime.now(timezone.utc).isoformat()
+    if coords is not None:
+        sb.table("houses").update(
+            {"latitude": coords[0], "longitude": coords[1], "geocoded_at": now}
+        ).eq("id", house_id).execute()
+    else:
+        # Mark attempted so we don't retry on every refresh.
+        sb.table("houses").update({"geocoded_at": now}).eq(
+            "id", house_id
+        ).execute()
+
+
+@router.get("/houses/map", response_model=HouseMapResponse)
 def list_houses_for_map(
+    background: BackgroundTasks,
     user: AuthUser = Depends(current_user),
     geocode_missing: bool = True,
-) -> list[HouseMapPin]:
-    """Return every house the user can see, with lat/lng. Lazily geocodes
-    rows that don't have coords yet via Nominatim (slow, ~1s per house) and
-    persists the result. Skips houses whose address can't be resolved."""
+) -> HouseMapResponse:
+    """Return every house the user can see, with lat/lng.
+
+    Geocoding is bounded: at most _MAX_SYNC_GEOCODE addresses are resolved
+    inside the request (so SSR returns in <3 s); the rest are queued as
+    BackgroundTasks and show up on the next page refresh."""
     from datetime import datetime, timezone
 
     from app.services.geocode import geocode_address
@@ -200,7 +235,7 @@ def list_houses_for_map(
     )
     tour_ids = [r["tour_id"] for r in (tp.data or [])]
     if not tour_ids:
-        return []
+        return HouseMapResponse(pins=[], total_houses=0, pending_geocode=0)
     res = (
         sb.table("houses")
         .select(
@@ -213,25 +248,42 @@ def list_houses_for_map(
     rows = res.data or []
     pins: list[HouseMapPin] = []
     now = datetime.now(timezone.utc).isoformat()
+    sync_budget = _MAX_SYNC_GEOCODE if geocode_missing else 0
+    pending = 0
     for h in rows:
         lat = h.get("latitude")
         lng = h.get("longitude")
-        if (lat is None or lng is None) and geocode_missing and h.get("address"):
-            coords = geocode_address(h["address"])
-            if coords is not None:
-                lat, lng = coords
-                sb.table("houses").update(
-                    {
-                        "latitude": lat,
-                        "longitude": lng,
-                        "geocoded_at": now,
-                    }
-                ).eq("id", h["id"]).execute()
+        # Already cached
+        if lat is not None and lng is not None:
+            pass
+        elif (
+            geocode_missing
+            and h.get("address")
+            # Only attempt if we haven't already tried + failed
+            and not h.get("geocoded_at")
+        ):
+            if sync_budget > 0:
+                sync_budget -= 1
+                coords = geocode_address(h["address"])
+                if coords is not None:
+                    lat, lng = coords
+                    sb.table("houses").update(
+                        {
+                            "latitude": lat,
+                            "longitude": lng,
+                            "geocoded_at": now,
+                        }
+                    ).eq("id", h["id"]).execute()
+                else:
+                    sb.table("houses").update({"geocoded_at": now}).eq(
+                        "id", h["id"]
+                    ).execute()
             else:
-                # Mark attempted so we don't retry every request.
-                sb.table("houses").update({"geocoded_at": now}).eq(
-                    "id", h["id"]
-                ).execute()
+                # Past sync budget — push to background, returns next refresh.
+                background.add_task(
+                    _geocode_house, house_id=h["id"], address=h["address"]
+                )
+                pending += 1
         if lat is None or lng is None:
             continue
         pins.append(
@@ -246,7 +298,9 @@ def list_houses_for_map(
                 photo_signed_url=h.get("photo_signed_url"),
             )
         )
-    return pins
+    return HouseMapResponse(
+        pins=pins, total_houses=len(rows), pending_geocode=pending
+    )
 
 
 @router.get("/tours/{tour_id}/houses", response_model=list[HouseOut])
