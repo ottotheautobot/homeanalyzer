@@ -6,15 +6,20 @@ import {
   Eye,
   GitCompare,
   Home as HomeIcon,
+  Layers,
+  Link2,
   Mail,
+  Map as MapIcon,
   MapPin,
   Mic,
   Radio,
+  Ruler,
   Shield,
   Sparkles,
   Trash2,
   Users,
   Video,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -76,6 +81,33 @@ const sections: Section[] = [
         title: "Audio and visual together",
         body: "If the agent mentioned a leak and the camera caught it, you see one note backed by both — not duplicates.",
       },
+      {
+        icon: Camera,
+        title: "Photo notes on the spot",
+        body: "Snap a picture of anything that catches your eye — a stain, a fixture, a question for the agent. The app reads it and adds an observation automatically.",
+      },
+    ],
+  },
+  {
+    heading: "See the layout, not just the walls",
+    blurb:
+      "After your tour, the app reconstructs the floor plan from the video — actual dimensions, not estimates.",
+    features: [
+      {
+        icon: Ruler,
+        title: "Measured rooms in feet and meters",
+        body: "Tap any room to see how big it is. Sizes come from the video itself, so they reflect the home you walked through, not a listing summary.",
+      },
+      {
+        icon: Layers,
+        title: "Honest about confidence",
+        body: "Rooms the camera covered well are drawn solid; under-covered rooms show as dashed outlines so you know which numbers to trust.",
+      },
+      {
+        icon: Sparkles,
+        title: "Generates on its own",
+        body: "Nothing to click. The plan is ready a few minutes after you finish — same flow as the brief.",
+      },
     ],
   },
   {
@@ -102,15 +134,25 @@ const sections: Section[] = [
     heading: "Tour solo when Zoom isn't an option",
     features: [
       {
+        icon: Mic,
+        title: "Record right in the browser",
+        body: "Tap one button and speak — your phone does the recording, the app does the rest. No separate app to install.",
+      },
+      {
         icon: HomeIcon,
-        title: "Just record and upload",
-        body: "If a Zoom call won't fly, record audio on your phone and upload after. Same brief, same observations, same comparison.",
+        title: "Or upload after the fact",
+        body: "Already recorded with another app? Drop the file in. Same brief, same observations, same comparison.",
       },
     ],
   },
   {
     heading: "Adding a house takes ten seconds",
     features: [
+      {
+        icon: Zap,
+        title: "Quick Tour for spontaneous viewings",
+        body: "Type an address and you're in the house page. Skips the create-tour-first dance for drive-bys.",
+      },
       {
         icon: MapPin,
         title: "Use my location",
@@ -129,6 +171,16 @@ const sections: Section[] = [
     ],
   },
   {
+    heading: "See everything you've toured at once",
+    features: [
+      {
+        icon: MapIcon,
+        title: "Map of every house",
+        body: "Pins for every property you've toured, colored by your score. Spot neighborhood patterns at a glance.",
+      },
+    ],
+  },
+  {
     heading: "Bring your team along",
     features: [
       {
@@ -140,6 +192,11 @@ const sections: Section[] = [
         icon: Shield,
         title: "Roles that match real life",
         body: "Buyer, partner, agent, friend & family. Everyone sees the same notes and briefs.",
+      },
+      {
+        icon: Link2,
+        title: "Share a read-only link",
+        body: "Send the tour summary to family, your lender, or a lawyer with one URL. They see the brief and the photos — no login. Revoke anytime.",
       },
     ],
   },
