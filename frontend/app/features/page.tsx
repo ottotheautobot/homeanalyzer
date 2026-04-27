@@ -39,68 +39,62 @@ type Section = {
 
 const sections: Section[] = [
   {
-    heading: "Tour with your family watching live, from anywhere",
-    blurb:
-      "House hunting often happens with one person on the ground and the other a thousand miles away. HomeAnalyzer brings them along.",
+    heading: "Tour with your family watching live",
     features: [
       {
         icon: Radio,
         title: "A quiet bot joins the Zoom",
-        body: "Tap Start Tour and a silent assistant called Tour Notes joins your Zoom call. It listens and watches — your spouse, your mom, your agent, anyone you invite can hop on Zoom too and see and hear the whole walkthrough.",
+        body: "Tap Start Tour. A silent assistant joins your Zoom so anyone you invite can watch the walkthrough.",
       },
       {
         icon: Mic,
-        title: "Live transcript as you talk",
-        body: "Words show up on the screen seconds after they're spoken — for the buyer holding the phone, for the partner watching from home, for anyone trying to follow what the agent just said about the roof.",
+        title: "Live transcript",
+        body: "Words appear on screen seconds after they're spoken — for you, for whoever's watching.",
       },
       {
         icon: Eye,
-        title: "Notes that organize themselves",
-        body: "As the conversation unfolds, observations populate automatically — categorized by hazard, concern, layout, condition, positive features, and what the agent specifically said. No clipboard, no remembering to jot it down.",
+        title: "Notes organize themselves",
+        body: "Observations populate automatically — hazards, concerns, layout, condition, positives, agent quotes. No clipboard.",
       },
       {
         icon: Mail,
-        title: "Auto-emailed when the tour starts",
-        body: "Everyone you've invited gets an email with the Zoom link the moment you tap Start. They join in one tap — no password, no fumbling.",
+        title: "Invitees auto-emailed at start",
+        body: "Everyone you invited gets the Zoom link the moment you tap Start. One tap to join.",
       },
     ],
   },
   {
-    heading: "Catch what you'd miss in the moment",
-    blurb:
-      "You can't look at everything at once. The app keeps watching while you're focused.",
+    heading: "Catch what you'd miss in person",
     features: [
       {
         icon: Video,
-        title: "It looks at the video, too",
-        body: "After the tour, the app reviews the recording frame by frame and surfaces visual details no one called out — the water stain on a ceiling, the chip in the cabinet, the peeling paint behind the door. Things you'd notice on the second walkthrough, but caught on the first.",
+        title: "It watches the video too",
+        body: "After the tour, the app reviews the recording and flags visual details no one called out — water stains, chipped cabinets, peeling paint.",
       },
       {
         icon: CheckCircle2,
-        title: "Audio and visual notes side by side",
-        body: "Notes from what was said and notes from what was seen show up together. If the agent mentions a leak and the camera caught it too, you see one entry backed by both — not duplicates.",
+        title: "Audio and visual together",
+        body: "If the agent mentioned a leak and the camera caught it, you see one note backed by both — not duplicates.",
       },
     ],
   },
   {
     heading: "A clear brief at the end of every tour",
-    blurb:
-      "Within a minute or two of finishing, you have a written summary you can read on the drive to the next property.",
     features: [
       {
         icon: Sparkles,
-        title: "Executive summary, concerns, deal-breakers, score",
-        body: "A short, scannable post-tour brief: what shape this house is in, what should give you pause, what would disqualify it, what's genuinely great, and questions worth asking before an offer. Plus a 0–10 score so you can rank at a glance.",
+        title: "Summary, concerns, deal-breakers, score",
+        body: "A short, scannable post-tour brief — and a 0–10 score so you can rank at a glance.",
       },
       {
         icon: GitCompare,
         title: "Compare any houses, anytime",
-        body: "Pick a few houses — even from different tours — and ask anything in plain English: \"Which one had the best kitchen for kids?\", \"Rank these by how much work they need.\" You get a written answer that cites the houses by name.",
+        body: 'Pick a few — even from different tours — and ask in plain English: "Which had the best kitchen for kids?"',
       },
       {
         icon: DollarSign,
-        title: "Sale or rent, framed for the right decision",
-        body: "Mark a property as for sale or for rent and the brief adapts — resale considerations and offer strategy for buyers, lease terms and landlord notes for renters.",
+        title: "Sale or rent, framed right",
+        body: "Mark a property for sale or for rent and the brief adapts — resale strategy or lease considerations.",
       },
     ],
   },
@@ -109,28 +103,28 @@ const sections: Section[] = [
     features: [
       {
         icon: HomeIcon,
-        title: "Just record audio and upload",
-        body: "Some sellers and agents won't be comfortable with a Zoom call. No problem — record audio on your phone with any voice memo app, upload it when you're done, and the same brief, observations, and comparison work the same way.",
+        title: "Just record and upload",
+        body: "If a Zoom call won't fly, record audio on your phone and upload after. Same brief, same observations, same comparison.",
       },
     ],
   },
   {
-    heading: "Adding a house should take ten seconds",
+    heading: "Adding a house takes ten seconds",
     features: [
       {
         icon: MapPin,
         title: "Use my location",
-        body: "Standing on the front porch? Tap one button to fill in the address from your phone's location. Edit if it's slightly off, then move on.",
+        body: "Standing on the porch? One tap fills in the address from your phone.",
       },
       {
         icon: Camera,
         title: "Curb appeal photo",
-        body: "Snap a quick exterior shot from the iPhone camera right in the form. Helps you remember which one was \"the one with the blue shutters\" three days later.",
+        body: "Snap an exterior shot in the form. Remember which one had the blue shutters.",
       },
       {
         icon: Compass,
         title: "One-tap listing search",
-        body: "Once the address is filled in, search Zillow, Redfin, or Google with one tap to grab the MLS link, see the photos, or pull up neighborhood stats — without retyping anything.",
+        body: "Search Zillow, Redfin, or Google with the address — no retyping.",
       },
     ],
   },
@@ -140,12 +134,12 @@ const sections: Section[] = [
       {
         icon: Users,
         title: "One-tap email invites",
-        body: "Invite your spouse, partner, parent, agent, or a friend whose opinion you trust. They click the email link and they're in — no password, no signup screen, no \"please verify your email\" dance.",
+        body: "Invite your partner, parent, agent, or a friend. They click the email and they're in — no password.",
       },
       {
         icon: Shield,
         title: "Roles that match real life",
-        body: "Buyer, partner, agent, friend & family. Everyone sees the same observations, briefs, and the comparison view across all the houses you've toured together.",
+        body: "Buyer, partner, agent, friend & family. Everyone sees the same notes and briefs.",
       },
     ],
   },
@@ -155,12 +149,12 @@ const sections: Section[] = [
       {
         icon: Trash2,
         title: "Swipe to delete, fully",
-        body: "Swipe a tour or a house off the list and everything goes with it — recordings, observations, photos. No leftover clutter from places you've ruled out.",
+        body: "Swipe a tour or house off the list — recordings, observations, photos, all gone.",
       },
       {
         icon: Shield,
-        title: "Privacy-conscious",
-        body: "Your recordings live in your private storage. Invitees only see the tours you specifically share with them. Nothing's public.",
+        title: "Private by default",
+        body: "Your recordings stay in your private storage. Invitees only see what you share with them.",
       },
     ],
   },
@@ -201,11 +195,9 @@ export default function FeaturesPage() {
             Tour smarter.
           </h1>
           <p className="text-lg text-zinc-600 dark:text-zinc-400">
-            HomeAnalyzer is for the buyer or renter walking through five
-            houses in a week, the partner watching from another state, and
-            the agent helping them make a decision they can live with.
-            Live notes during the tour, a clear written brief after, and an
-            easy way to compare every house you&apos;ve seen.
+            Live notes during every house tour, a clear written brief
+            after, and an easy way to compare everything you&apos;ve seen.
+            Built for buyers, renters, and the people helping them decide.
           </p>
         </div>
 
