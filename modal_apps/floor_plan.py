@@ -28,6 +28,7 @@ import modal
 
 WEIGHTS_PATH = "/weights"
 MAST3R_PATH = "/opt/mast3r"
+VGGT_PATH = "/opt/vggt"
 weights_vol = modal.Volume.from_name("floorplan-weights", create_if_missing=True)
 
 # CUDA-devel base so we have nvcc available for the curope kernel build.
@@ -74,14 +75,14 @@ floorplan_image = (
         "anthropic>=0.40.0",
     )
     .run_commands(
+        # MASt3R is kept as a fallback path. VGGT is the primary reconstruction
+        # primitive — single forward pass, commercial-licensed checkpoint,
+        # better point tracks for view-association.
         f"git clone --recursive https://github.com/naver/mast3r {MAST3R_PATH}",
-        # MASt3R's own requirements.txt is light — most heavy deps already listed above.
         f"pip install -r {MAST3R_PATH}/requirements.txt || true",
         f"pip install -r {MAST3R_PATH}/dust3r/requirements.txt || true",
-        # Build the curope rotary-embedding CUDA kernel. Without this MASt3R
-        # falls back to pure PyTorch, which is ~3-5x slower on the pairwise
-        # encoder pass. TORCH_CUDA_ARCH_LIST limits the build to A10G's
-        # compute capability so it doesn't compile for every GPU class.
+        # Build curope CUDA kernel for MASt3R's RoPE2D — cheap and prevents
+        # the pure-PyTorch fallback when MASt3R fires as a fallback.
         (
             "cd " + MAST3R_PATH + "/dust3r/croco/models/curope && "
             "CC=gcc CXX=g++ "
@@ -89,11 +90,16 @@ floorplan_image = (
             "FORCE_CUDA=1 "
             "python setup.py build_ext --inplace"
         ),
+        # VGGT — primary reconstruction primitive (commercial license).
+        # Repo bundles only the package code; weights pull lazily from HF
+        # using the HF_TOKEN secret, cached to /weights/vggt across runs.
+        f"git clone https://github.com/facebookresearch/vggt {VGGT_PATH}",
+        f"pip install -r {VGGT_PATH}/requirements.txt || true",
     )
     .env(
         {
             "PYTHONPATH": (
-                f"{MAST3R_PATH}:{MAST3R_PATH}/dust3r:"
+                f"{VGGT_PATH}:{MAST3R_PATH}:{MAST3R_PATH}/dust3r:"
                 f"{MAST3R_PATH}/dust3r/croco"
             )
         }
@@ -160,27 +166,47 @@ def reconstruct_floor_plan(
     rooms_meta = (schematic or {}).get("rooms") or []
     doors_meta = (schematic or {}).get("doors") or []
 
-    # Phase 3: try MASt3R first — full multi-view reconstruction.
+    # v2.0: try VGGT first — single forward pass, commercial license,
+    # better view-association via per-pixel depth confidence.
+    scene = None
+    primitive = None
     try:
-        mast3r_out = _run_mast3r(frames, log)
-    except Exception as e:
-        log.exception("mast3r failed; will fall back to depth-only path")
-        mast3r_out = None
+        scene = _run_vggt(frames, log)
+        if scene is not None:
+            primitive = "vggt"
+    except Exception:
+        log.exception("vggt failed; falling back to mast3r")
 
-    if mast3r_out is not None:
+    if scene is None:
+        try:
+            scene = _run_mast3r(frames, log)
+            if scene is not None:
+                primitive = "mast3r"
+        except Exception:
+            log.exception("mast3r failed; will fall back to depth-only path")
+
+    if scene is not None:
         # Tier 1: intrinsic segmentation — cluster camera trajectory + label
         # via Claude vision. Independent of the schematic's time windows.
         try:
-            plan = _build_intrinsic_plan(mast3r_out, frames, log)
+            plan = _build_intrinsic_plan(scene, frames, log)
             plan["stats"] = {
                 "frames": len(frames),
                 "duration_s": duration_s,
-                "points_total": int(mast3r_out["n_points"]),
+                "points_total": int(scene["n_points"]),
                 "rooms_with_data": sum(
                     1 for r in plan["rooms"] if r.get("sample_count", 0) > 0
                 ),
                 "tier": "intrinsic",
+                "primitive": primitive,
             }
+            # Tag the model version with the primitive so we can filter rerun
+            # candidates later without re-deriving from stats.
+            plan["model_version"] = (
+                f"{primitive}-intrinsic.v2.0"
+                if primitive == "vggt"
+                else plan.get("model_version", "mast3r-intrinsic.v1.8")
+            )
             return plan
         except Exception:
             log.exception(
@@ -191,16 +217,17 @@ def reconstruct_floor_plan(
         if rooms_meta:
             try:
                 plan = _build_mast3r_plan(
-                    mast3r_out, frame_timestamps, rooms_meta, doors_meta, log
+                    scene, frame_timestamps, rooms_meta, doors_meta, log
                 )
                 plan["stats"] = {
                     "frames": len(frames),
                     "duration_s": duration_s,
-                    "points_total": int(mast3r_out["n_points"]),
+                    "points_total": int(scene["n_points"]),
                     "rooms_with_data": sum(
                         1 for r in plan["rooms"] if r.get("sample_count", 0) > 0
                     ),
                     "tier": "mast3r-schematic",
+                    "primitive": primitive,
                 }
                 return plan
             except Exception:
@@ -389,6 +416,190 @@ def _probe_duration_safe(path: str) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _run_vggt(frames: list[bytes], log) -> dict | None:
+    """Single-pass reconstruction via VGGT-1B-Commercial.
+
+    Returns the same dict shape as _run_mast3r so the rest of the pipeline
+    is reconstruction-primitive-agnostic:
+        pts3d:    list of (N, 3) per-frame world-coord points
+        confs:    list of (N,) per-point confidence
+        poses:    (F, 4, 4) cam-to-world (OpenCV convention -> our convention)
+        focals:   (F,) per-frame focal length in pixels
+        n_points: total kept-point count
+
+    VGGT vs MASt3R upsides for our pipeline:
+      - Single forward pass on all frames at once (no pairwise + sparse_ga).
+        Roughly 2-3x faster end-to-end on 36 frames.
+      - Per-pixel depth confidence is well-calibrated — useful for the
+        view-association tightening planned for v2.x.
+      - Commercial license (vs. CC-BY-NC for the public MASt3R weights).
+    """
+    import os
+    import sys
+    import tempfile
+
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    sys.path.insert(0, VGGT_PATH)
+    from vggt.models.vggt import VGGT  # type: ignore
+    from vggt.utils.geometry import unproject_depth_map_to_point_map  # type: ignore
+    from vggt.utils.load_fn import load_and_preprocess_images  # type: ignore
+    from vggt.utils.pose_enc import pose_encoding_to_extri_intri  # type: ignore
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available()
+        and torch.cuda.get_device_capability()[0] >= 8
+        else torch.float16
+    )
+
+    cache_dir = f"{WEIGHTS_PATH}/vggt"
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ.setdefault("HF_HOME", cache_dir)
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", cache_dir)
+
+    log.info(
+        "loading VGGT-1B-Commercial on %s (dtype=%s)", device, dtype
+    )
+    hf_token = os.environ.get("HF_TOKEN")
+    model = VGGT.from_pretrained(
+        "facebook/VGGT-1B-Commercial",
+        token=hf_token,
+        cache_dir=cache_dir,
+    ).to(device)
+    model.eval()
+
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for i, fb in enumerate(frames):
+            p = os.path.join(td, f"f-{i:04d}.jpg")
+            with open(p, "wb") as f:
+                f.write(fb)
+            paths.append(p)
+        log.info("VGGT: loading %d frames", len(paths))
+        images = load_and_preprocess_images(paths).to(device)
+        # Original (height, width) before preprocessing — VGGT pose decoder
+        # wants the *processed* image shape, which is what `images` reports.
+        img_shape = images.shape[-2:]
+
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(dtype=dtype):
+                images_b = images[None]  # add batch dim
+                tokens, ps_idx = model.aggregator(images_b)
+
+            pose_enc = model.camera_head(tokens)[-1]
+            extrinsic, intrinsic = pose_encoding_to_extri_intri(
+                pose_enc, img_shape
+            )
+            depth_map, depth_conf = model.depth_head(tokens, images_b, ps_idx)
+            log.info(
+                "VGGT: depth %s conf %s extr %s intr %s",
+                tuple(depth_map.shape),
+                tuple(depth_conf.shape),
+                tuple(extrinsic.shape),
+                tuple(intrinsic.shape),
+            )
+            # Unproject depth into world-coord points (recommended over
+            # the model's point_head — the README calls this more accurate).
+            pm_np = unproject_depth_map_to_point_map(
+                depth_map.squeeze(0),
+                extrinsic.squeeze(0),
+                intrinsic.squeeze(0),
+            )
+
+    # Coerce everything to plain numpy + (per-frame) flat (N,3) / (N,) shapes,
+    # matching _run_mast3r's contract.
+    if isinstance(pm_np, torch.Tensor):
+        pm_np = pm_np.detach().cpu().numpy()
+    pm_np = np.asarray(pm_np)  # (F, H, W, 3)
+    conf_np = depth_conf.squeeze(0).detach().to(torch.float32).cpu().numpy()
+    extr_np = extrinsic.squeeze(0).detach().to(torch.float32).cpu().numpy()
+    intr_np = intrinsic.squeeze(0).detach().to(torch.float32).cpu().numpy()
+
+    # extrinsic is world->camera (OpenCV / world-from-camera flipped). Invert
+    # to get cam->world poses, in the same convention _run_mast3r returned.
+    F = extr_np.shape[0]
+    cam2w = np.zeros((F, 4, 4), dtype=np.float32)
+    cam2w[:, 3, 3] = 1.0
+    for i in range(F):
+        # extr is 3x4 [R|t]. Build 4x4 then invert.
+        E = np.eye(4, dtype=np.float32)
+        E[:3, :4] = extr_np[i]
+        cam2w[i] = np.linalg.inv(E)
+
+    pts3d = [pm_np[i].reshape(-1, 3).astype(np.float32) for i in range(F)]
+    confs = [conf_np[i].reshape(-1).astype(np.float32) for i in range(F)]
+    focals = intr_np[:, 0, 0].astype(np.float32)
+    n_points = sum(int(p.shape[0]) for p in pts3d)
+
+    # VGGT outputs are scale-normalized (NOT metric meters). Calibrate to
+    # metric by assuming the camera was held at ~1.4m above the floor —
+    # typical handheld phone height. Find the floor as the lowest 5% of
+    # points, then scale so (median camera height − floor height) ≈ 1.4m.
+    cam_pos = cam2w[:, :3, 3]  # (F, 3)
+    all_xyz = np.concatenate(pts3d, axis=0)
+    # Pick "up axis" as the one with smallest camera variance (the user
+    # walks horizontally, not vertically).
+    cam_var = np.var(cam_pos, axis=0)
+    up_axis = int(np.argmin(cam_var))
+    pt_up = all_xyz[:, up_axis]
+    cam_up = cam_pos[:, up_axis]
+    # Floor candidate: 5th percentile of point-cloud up-coord (below floor
+    # is rare; above-floor walls/ceiling dominate).
+    floor_up = float(np.percentile(pt_up, 5))
+    cam_up_med = float(np.median(cam_up))
+    rel_height = abs(cam_up_med - floor_up)
+    if rel_height < 1e-3:
+        log.warning(
+            "VGGT scale calibration: camera height delta near zero (%.5f); "
+            "skipping rescale",
+            rel_height,
+        )
+        scale = 1.0
+    else:
+        TARGET_CAM_HEIGHT_M = 1.4
+        scale = TARGET_CAM_HEIGHT_M / rel_height
+    log.info(
+        "VGGT scale calibration: up_axis=%d floor_up=%.4f cam_up_med=%.4f "
+        "delta=%.4f scale=%.4f",
+        up_axis,
+        floor_up,
+        cam_up_med,
+        rel_height,
+        scale,
+    )
+    if not (0.01 < scale < 100):
+        log.warning("scale out of plausible range; clamping to 1.0")
+        scale = 1.0
+
+    # Apply scale to points and camera translations.
+    pts3d = [p * scale for p in pts3d]
+    cam2w = cam2w.copy()
+    cam2w[:, :3, 3] *= scale
+
+    log.info(
+        "VGGT: %d frames, %d total points, focal=%.1fpx, scale_applied=%.3f",
+        F,
+        n_points,
+        float(focals.mean()),
+        scale,
+    )
+
+    del model
+    torch.cuda.empty_cache()
+
+    return {
+        "pts3d": pts3d,
+        "confs": confs,
+        "poses": cam2w,
+        "focals": focals,
+        "n_points": n_points,
+    }
+
+
 def _run_mast3r(frames: list[bytes], log) -> dict | None:
     """Run MASt3R sparse global alignment on the sampled frames.
 
@@ -536,22 +747,35 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
     poses = scene["poses"]
 
     # Aggregate confident points + per-point frame attribution.
-    CONF_THR = 1.5
+    # Use a percentile-based filter so this works regardless of which
+    # reconstruction primitive produced confs (MASt3R's clean_pointcloud
+    # confs are on a ~1-10 scale; VGGT's depth_conf is a different
+    # distribution entirely). Keep the top 50% per frame.
+    CONF_KEEP_PCT = 50.0
     all_pts = []
     all_frame_idx = []
     for i, (pts, conf) in enumerate(zip(pts3d_list, confs_list)):
         flat_pts = pts.reshape(-1, 3)
         flat_conf = conf.reshape(-1)
-        keep = flat_conf > CONF_THR
+        if flat_conf.size == 0:
+            continue
+        thr = float(np.percentile(flat_conf, 100 - CONF_KEEP_PCT))
+        keep = flat_conf >= thr
         if not keep.any():
             continue
         kp = flat_pts[keep]
         all_pts.append(kp)
         all_frame_idx.append(np.full(kp.shape[0], i, dtype=np.int32))
     if not all_pts:
-        raise RuntimeError("MASt3R returned no confident points")
+        raise RuntimeError("reconstruction returned no usable points")
     all_pts = np.concatenate(all_pts, axis=0)
     all_frame_idx = np.concatenate(all_frame_idx, axis=0)
+    log.info(
+        "kept %d points across %d frames (top %.0f%% by confidence per frame)",
+        all_pts.shape[0],
+        len(pts3d_list),
+        CONF_KEEP_PCT,
+    )
 
     # 1. Floor plane fit + rotate to floor-up.
     floor = _find_floor(all_pts, poses, log)
@@ -1904,6 +2128,43 @@ def _placeholder_plan(
         "notes": notes,
         "model_version": "stub.v1",
         "stats": stats,
+    }
+
+
+@app.function(
+    image=floorplan_image,
+    gpu="A10G",
+    timeout=600,
+    volumes={WEIGHTS_PATH: weights_vol},
+    secrets=[
+        modal.Secret.from_name("huggingface", required_keys=["HF_TOKEN"]),
+    ],
+)
+def vggt_smoke() -> dict:
+    """Verify VGGT-1B-Commercial imports + downloads cleanly. Doesn't run
+    inference — just confirms the install + auth flow works."""
+    log = _setup_logging()
+    sys.path.insert(0, VGGT_PATH)
+    log.info("importing vggt...")
+    import torch  # noqa: F401
+    from vggt.models.vggt import VGGT  # type: ignore
+
+    cache_dir = f"{WEIGHTS_PATH}/vggt"
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ["HF_HOME"] = cache_dir
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", cache_dir)
+    log.info("loading commercial checkpoint...")
+    model = VGGT.from_pretrained(
+        "facebook/VGGT-1B-Commercial",
+        token=os.environ.get("HF_TOKEN"),
+        cache_dir=cache_dir,
+    )
+    n_params = sum(p.numel() for p in model.parameters())
+    log.info("VGGT loaded: %.1fM params", n_params / 1e6)
+    return {
+        "ok": True,
+        "params_m": n_params / 1e6,
+        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
     }
 
 
