@@ -19,6 +19,10 @@ export type MergedFloorPlanRoom = FloorPlanRoom & {
    *  "estimate" — schematic only (transcript said it; camera didn't see it).
    *  "vision-only" — measured only (camera saw it; transcript missed it). */
   source: RoomSource;
+  /** 1-based floor index. Carries through from measured if present;
+   *  defaults to 1 for schematic-only rooms (which we don't currently
+   *  multi-story). */
+  floor?: number;
 };
 
 export type MergedFloorPlan = Omit<FloorPlan, "rooms"> & {
@@ -27,6 +31,43 @@ export type MergedFloorPlan = Omit<FloorPlan, "rooms"> & {
 
 function labelKey(label: string | null | undefined): string {
   return (label || "").toLowerCase().trim();
+}
+
+/** Match measured "kitchen" to schematic "kitchen island", measured
+ *  "hallway" to "hallway (main floor)", measured "bathroom" to
+ *  "first-floor full bathroom". Returns true if either label contains
+ *  the OTHER as a whole-word substring. Picks the closest match (shortest
+ *  schematic label) when multiple candidates qualify. */
+function findSchematicMatch(
+  measuredLabel: string,
+  schematicByExactLabel: Map<string, FloorPlanRoom>,
+  schematicAll: FloorPlanRoom[],
+): FloorPlanRoom | undefined {
+  const mKey = labelKey(measuredLabel);
+  if (!mKey) return undefined;
+  // Exact match first (preferred).
+  const exact = schematicByExactLabel.get(mKey);
+  if (exact) return exact;
+  // Substring fallback: schematic label contains measured as a word, or
+  // vice versa. Prefer shorter schematic label (closest fit).
+  const candidates: FloorPlanRoom[] = [];
+  for (const sr of schematicAll) {
+    const sKey = labelKey(sr.label);
+    if (!sKey) continue;
+    // Word-boundary contains (so "kitchen" matches "kitchen (main)" but
+    // not "kitchenette" since kitchenette has no word-break after kitchen).
+    const re = new RegExp(`(^|\\W)${escapeRegex(mKey)}(\\W|$)`);
+    if (re.test(sKey) || new RegExp(`(^|\\W)${escapeRegex(sKey)}(\\W|$)`).test(mKey)) {
+      candidates.push(sr);
+    }
+  }
+  if (!candidates.length) return undefined;
+  candidates.sort((a, b) => a.label.length - b.label.length);
+  return candidates[0];
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -84,6 +125,7 @@ export function mergeFloorPlans(
         width_ft: Math.max(1, Math.round(mr.width_m * M_TO_FT)),
         depth_ft: Math.max(1, Math.round(mr.depth_m * M_TO_FT)),
         source: "vision-only",
+        floor: mr.floor ?? 1,
       })),
       doors: measured.doors.map((d) => ({
         from: d.from,
@@ -97,35 +139,49 @@ export function mergeFloorPlans(
   }
 
   // Both sources present — union them.
-  const measuredByLabel = new Map<string, MeasuredFloorPlanRoom>();
-  for (const mr of measured.rooms) {
-    const key = labelKey(mr.label);
-    if (key && !measuredByLabel.has(key)) {
-      measuredByLabel.set(key, mr);
+  const schematicByExact = new Map<string, FloorPlanRoom>();
+  for (const sr of schematic.rooms) {
+    const key = labelKey(sr.label);
+    if (key && !schematicByExact.has(key)) {
+      schematicByExact.set(key, sr);
     }
   }
 
   // measured.id → schematic.id mapping, for door remapping later.
   const measuredToSchematicId = new Map<string, string>();
+  const usedMeasuredIds = new Set<string>();
+
+  // For each measured room, find the best schematic match.
+  const measuredMatchToSchematic = new Map<string, MeasuredFloorPlanRoom>();
+  for (const mr of measured.rooms) {
+    const sr = findSchematicMatch(
+      mr.label,
+      schematicByExact,
+      schematic.rooms,
+    );
+    if (sr && !measuredMatchToSchematic.has(sr.id)) {
+      measuredMatchToSchematic.set(sr.id, mr);
+      usedMeasuredIds.add(mr.id);
+      measuredToSchematicId.set(mr.id, sr.id);
+    }
+  }
 
   const rooms: MergedFloorPlanRoom[] = [];
-  const usedMeasuredIds = new Set<string>();
 
   // Pass 1: schematic rooms. Override dimensions when matched.
   for (const sr of schematic.rooms) {
-    const match = measuredByLabel.get(labelKey(sr.label));
-    if (match && !usedMeasuredIds.has(match.id)) {
-      usedMeasuredIds.add(match.id);
-      measuredToSchematicId.set(match.id, sr.id);
+    const match = measuredMatchToSchematic.get(sr.id);
+    if (match) {
       rooms.push({
         ...sr,
         // Real dimensions from measurement override LLM estimate.
         width_ft: Math.max(1, Math.round(match.width_m * M_TO_FT)),
         depth_ft: Math.max(1, Math.round(match.depth_m * M_TO_FT)),
         source: "verified",
+        floor: match.floor ?? 1,
       });
     } else {
-      rooms.push({ ...sr, source: "estimate" });
+      rooms.push({ ...sr, source: "estimate", floor: 1 });
     }
   }
 
@@ -141,6 +197,7 @@ export function mergeFloorPlans(
       width_ft: Math.max(1, Math.round(mr.width_m * M_TO_FT)),
       depth_ft: Math.max(1, Math.round(mr.depth_m * M_TO_FT)),
       source: "vision-only",
+      floor: mr.floor ?? 1,
     });
   }
 

@@ -82,6 +82,8 @@ export type MeasuredFloorPlanRoom = {
   confidence: number;
   sample_count?: number;
   source?: "wall-points" | "camera-path" | string;
+  /** 1-based floor index. Default 1 for single-story tours / legacy data. */
+  floor?: number;
 };
 
 export type MeasuredFloorPlanDoor = {

@@ -203,10 +203,15 @@ def reconstruct_floor_plan(
             # Tag the model version with the primitive so we can filter rerun
             # candidates later without re-deriving from stats.
             plan["model_version"] = (
-                f"{primitive}-intrinsic.v2.1"
+                f"{primitive}-intrinsic.v2.2"
                 if primitive == "vggt"
                 else plan.get("model_version", "mast3r-intrinsic.v1.8")
             )
+            # Bubble up multi-story signal so the frontend can render tabs
+            # without re-deriving from per-room floor tags.
+            unique_floors = sorted({r.get("floor", 1) for r in plan["rooms"]})
+            plan["floors_detected"] = len(unique_floors)
+            plan["floor_indices"] = unique_floors
             return plan
         except Exception:
             log.exception(
@@ -795,29 +800,66 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
     aligned_cams[:, :2] = aligned_cams[:, :2] @ R_man.T
     log.info("manhattan rotation applied")
 
-    # 3. Cluster cameras spatially.
-    clusters = _cluster_cameras(aligned_cams[:, :2], log)
-    if not clusters:
-        raise RuntimeError("camera clustering produced no clusters")
-    log.info("camera clustering -> %d clusters", len(clusters))
+    # 2.5. Multi-story detection from camera Z distribution.
+    floors = _detect_floors(aligned_cams[:, 2], log)
+    log.info(
+        "detected %d floor(s): %s",
+        len(floors),
+        [
+            (f["floor_idx"], f["z_min"], f["z_max"], len(f["frame_indices"]))
+            for f in floors
+        ],
+    )
 
-    # 4. Per-cluster geometry, with view-association filter.
+    # 3-5. Per-floor: cluster cameras, build cluster rooms, merge overlaps.
+    # Each room gets a `floor` tag so the frontend can render multi-story
+    # tours as tabs / per-floor sections instead of stacking them in one
+    # plane (which was producing nonsense for two-story houses where the
+    # camera traversed both floors).
     rooms_raw = []
-    for cid, frame_idxs in sorted(clusters.items()):
-        if not frame_idxs:
+    for floor in floors:
+        floor_idx = floor["floor_idx"]
+        floor_frame_idxs = floor["frame_indices"]
+        if not floor_frame_idxs:
             continue
-        room = _compute_cluster_room(
-            cid, frame_idxs, aligned_pts, all_frame_idx, aligned_cams, log
+        floor_z_offset = floor["z_min"]
+        floor_cam_xy = aligned_cams[floor_frame_idxs, :2]
+        # Cluster within this floor only.
+        sub_clusters = _cluster_cameras(floor_cam_xy, log)
+        if not sub_clusters:
+            log.info("floor %d: no clusters", floor_idx)
+            continue
+        log.info(
+            "floor %d: %d clusters from %d frames",
+            floor_idx,
+            len(sub_clusters),
+            len(floor_frame_idxs),
         )
-        if room is not None:
-            rooms_raw.append(room)
+        floor_rooms = []
+        for sub_cid, sub_idxs in sorted(sub_clusters.items()):
+            # Indexes are into floor_frame_idxs — remap to global frame indices.
+            global_idxs = [int(floor_frame_idxs[i]) for i in sub_idxs]
+            cid = f"f{floor_idx}.c{sub_cid}"
+            room = _compute_cluster_room(
+                cid,
+                global_idxs,
+                aligned_pts,
+                all_frame_idx,
+                aligned_cams,
+                log,
+                floor_z_offset=floor_z_offset,
+            )
+            if room is not None:
+                room["floor"] = floor_idx
+                floor_rooms.append(room)
+        # Merge overlaps within this floor.
+        floor_rooms = _merge_overlapping_clusters(
+            floor_rooms, aligned_pts, all_frame_idx, aligned_cams, log
+        )
+        rooms_raw.extend(floor_rooms)
+
     if not rooms_raw:
         raise RuntimeError("no rooms produced after clustering")
-
-    # 5. Iterative overlap merge — IoU > 0.3 collapses pairs.
-    rooms_raw = _merge_overlapping_clusters(
-        rooms_raw, aligned_pts, all_frame_idx, aligned_cams, log
-    )
 
     # 6. Vision-label each cluster.
     labels = _label_clusters_via_vision(rooms_raw, frames, log)
@@ -833,6 +875,7 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
                 "confidence": r["confidence"],
                 "sample_count": r["sample_count"],
                 "source": r["source"],
+                "floor": r.get("floor", 1),
             }
         )
 
@@ -877,6 +920,113 @@ def _build_intrinsic_plan(scene: dict, frames: list[bytes], log) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# v2.2 multi-story detection
+# ---------------------------------------------------------------------------
+
+
+# Floors are considered distinct if the K-means cluster centers on camera Z
+# are at least this far apart (in scaled meters). Floor-to-floor in a typical
+# house is ~2.7m, but VGGT's scale calibration compresses this when the tour
+# spans both floors (the median camera height ends up between floors so the
+# 1.4m-target gets divided across both). 1.0m is a conservative threshold.
+_MULTI_STORY_MIN_GAP_M = 1.0
+# Don't even try multi-story detection if the camera Z span is below this —
+# people don't walk up/down 1.5m on one floor.
+_MULTI_STORY_MIN_SPAN_M = 1.5
+
+
+def _detect_floors(cam_z, log) -> list[dict]:
+    """Detect distinct floors from the camera Z distribution.
+
+    Returns a list of dicts, oldest-floor (lowest Z) first:
+        {
+            "floor_idx": 1, 2, ...,
+            "z_min": float,
+            "z_max": float,
+            "frame_indices": [int, ...],  # indexes into cam_z / aligned_cams
+        }
+
+    Single-story tours return a one-element list.
+    """
+    import numpy as np
+
+    n = len(cam_z)
+    if n == 0:
+        return []
+    z = np.asarray(cam_z, dtype=float)
+    span = float(z.max() - z.min())
+    if span < _MULTI_STORY_MIN_SPAN_M:
+        return [
+            {
+                "floor_idx": 1,
+                "z_min": float(z.min()),
+                "z_max": float(z.max()),
+                "frame_indices": list(range(n)),
+            }
+        ]
+
+    # 1D K-means with k=2 to test for bimodality.
+    try:
+        from sklearn.cluster import KMeans
+
+        km = KMeans(n_clusters=2, n_init=10, random_state=42).fit(z.reshape(-1, 1))
+    except Exception:
+        log.exception("KMeans for multi-story detection failed; assuming single-story")
+        return [
+            {
+                "floor_idx": 1,
+                "z_min": float(z.min()),
+                "z_max": float(z.max()),
+                "frame_indices": list(range(n)),
+            }
+        ]
+
+    centers = km.cluster_centers_.flatten()
+    gap = abs(float(centers[0] - centers[1]))
+    if gap < _MULTI_STORY_MIN_GAP_M:
+        log.info(
+            "multi-story rejected: cluster gap %.2fm < %.2fm threshold",
+            gap,
+            _MULTI_STORY_MIN_GAP_M,
+        )
+        return [
+            {
+                "floor_idx": 1,
+                "z_min": float(z.min()),
+                "z_max": float(z.max()),
+                "frame_indices": list(range(n)),
+            }
+        ]
+
+    # Reassign labels so floor 1 is the lower cluster.
+    labels = km.labels_.copy()
+    if centers[0] > centers[1]:
+        labels = 1 - labels
+
+    floors = []
+    for f in (0, 1):
+        idxs = [i for i in range(n) if labels[i] == f]
+        if not idxs:
+            continue
+        f_z = z[idxs]
+        floors.append(
+            {
+                "floor_idx": f + 1,
+                "z_min": float(f_z.min()),
+                "z_max": float(f_z.max()),
+                "frame_indices": idxs,
+            }
+        )
+    log.info(
+        "MULTI-STORY DETECTED: %d floors, gap=%.2fm, span=%.2fm",
+        len(floors),
+        gap,
+        span,
+    )
+    return floors
+
+
+# ---------------------------------------------------------------------------
 # v1.7 helpers: per-cluster geometry, overlap merge, door cap, confidence
 # ---------------------------------------------------------------------------
 
@@ -890,12 +1040,23 @@ _VIEW_ASSOC_MAX_DIST_M = 3.0
 
 
 def _compute_cluster_room(
-    cid, frame_idxs, aligned_pts, all_frame_idx, aligned_cams, log
+    cid,
+    frame_idxs,
+    aligned_pts,
+    all_frame_idx,
+    aligned_cams,
+    log,
+    floor_z_offset: float = 0.0,
 ):
     """Build the per-cluster room dict given its frame indices.
 
     Applies the v1.7 view-association filter: only keep wall-height points
     within _VIEW_ASSOC_MAX_DIST_M of any camera in this cluster.
+
+    `floor_z_offset` is the Z value of this room's floor in the aligned
+    coordinate frame. Wall-height filter is applied RELATIVE to that
+    offset so multi-story tours' upper floors don't get filtered away
+    by a hard-coded "0.1m to 2.2m above Z=0" mask.
     """
     import numpy as np
 
@@ -903,7 +1064,8 @@ def _compute_cluster_room(
     mask = np.isin(all_frame_idx, frame_set)
     cpts = aligned_pts[mask]
     if cpts.shape[0] > 0:
-        wh = (cpts[:, 2] > 0.1) & (cpts[:, 2] < 2.2)
+        rel_z = cpts[:, 2] - floor_z_offset
+        wh = (rel_z > 0.1) & (rel_z < 2.2)
         cpts = cpts[wh]
 
     cam_xy = aligned_cams[frame_idxs, :2]

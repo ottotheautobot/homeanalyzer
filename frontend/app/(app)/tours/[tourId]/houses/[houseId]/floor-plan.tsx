@@ -6,7 +6,11 @@ import type { FloorPlan, FloorPlanRoom } from "@/lib/types";
 
 type RoomSource = "verified" | "estimate" | "vision-only";
 
-type RoomWithSource = FloorPlanRoom & { source?: RoomSource };
+type RoomWithSource = FloorPlanRoom & {
+  source?: RoomSource;
+  /** 1-based floor. Default 1 when omitted. */
+  floor?: number;
+};
 
 type AnyPlan = Omit<FloorPlan, "rooms"> & { rooms: RoomWithSource[] };
 
@@ -254,10 +258,36 @@ export function FloorPlanView({
    *  tag overrides the global one for that room's annotation. */
   source?: "schematic" | "measured";
 }) {
-  const layout = useMemo(() => placeRooms(plan), [plan]);
+  const allRooms = (plan.rooms as RoomWithSource[]) || [];
+  // Group by floor. If only one floor, render directly. Otherwise
+  // render a tab strip so the user can switch between 1st / 2nd floor.
+  const floorIds = Array.from(
+    new Set(allRooms.map((r) => r.floor ?? 1)),
+  ).sort((a, b) => a - b);
+  const isMultiFloor = floorIds.length > 1;
+  const [activeFloor, setActiveFloor] = useState<number>(floorIds[0] ?? 1);
+  const visibleRooms =
+    isMultiFloor
+      ? allRooms.filter((r) => (r.floor ?? 1) === activeFloor)
+      : allRooms;
+  const visibleRoomIds = new Set(visibleRooms.map((r) => r.id));
+  const visibleDoors = isMultiFloor
+    ? plan.doors.filter(
+        (d) => visibleRoomIds.has(d.from) && visibleRoomIds.has(d.to),
+      )
+    : plan.doors;
+  const visiblePlan = useMemo(
+    () => ({ ...plan, rooms: visibleRooms, doors: visibleDoors }),
+    [plan, visibleRooms, visibleDoors],
+  );
+
+  const layout = useMemo(
+    () => placeRooms(visiblePlan as AnyPlan),
+    [visiblePlan],
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  if (plan.rooms.length === 0) {
+  if (allRooms.length === 0) {
     return (
       <p className="text-sm text-zinc-500">
         Not enough signal in the tour to reconstruct rooms.
@@ -293,6 +323,37 @@ export function FloorPlanView({
           <span className="text-zinc-500">{plan.notes}</span>
         ) : null}
       </div>
+
+      {isMultiFloor ? (
+        <div
+          role="tablist"
+          aria-label="Floor selector"
+          className="inline-flex rounded-md border border-zinc-200 dark:border-zinc-800 p-0.5 bg-zinc-50 dark:bg-zinc-900/40"
+        >
+          {floorIds.map((f) => {
+            const active = f === activeFloor;
+            const count = allRooms.filter((r) => (r.floor ?? 1) === f).length;
+            const ord = f === 1 ? "1st" : f === 2 ? "2nd" : f === 3 ? "3rd" : `${f}th`;
+            return (
+              <button
+                key={f}
+                role="tab"
+                aria-selected={active}
+                onClick={() => setActiveFloor(f)}
+                className={
+                  active
+                    ? "px-3 py-1 rounded text-xs font-medium bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50 shadow-sm"
+                    : "px-3 py-1 rounded text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
+                }
+              >
+                {ord} floor
+                <span className="ml-1.5 text-zinc-400">·</span>
+                <span className="ml-1.5 text-zinc-500 tabular-nums">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40 overflow-x-auto">
         <svg
