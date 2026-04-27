@@ -67,6 +67,36 @@ export type House = {
   photo_signed_url: string | null;
   synthesis_md: string | null;
   floor_plan_json: FloorPlan | null;
+  measured_floor_plan_json: MeasuredFloorPlan | null;
+  measured_floor_plan_status: "pending" | "ready" | "failed" | null;
+  measured_floor_plan_error: string | null;
+  measured_floor_plan_started_at: string | null;
+};
+
+export type MeasuredFloorPlanRoom = {
+  id: string;
+  label: string;
+  polygon_m: Array<[number, number]>;
+  width_m: number;
+  depth_m: number;
+  confidence: number;
+};
+
+export type MeasuredFloorPlanDoor = {
+  from: string;
+  to: string;
+  x_m: number;
+  z_m: number;
+};
+
+export type MeasuredFloorPlan = {
+  rooms: MeasuredFloorPlanRoom[];
+  doors: MeasuredFloorPlanDoor[];
+  scale_m_per_unit: number;
+  confidence: "low" | "medium" | "high";
+  notes: string | null;
+  model_version: string;
+  stats: Record<string, unknown> | null;
 };
 
 export type FloorPlanRoom = {

@@ -82,6 +82,19 @@ Used for "tour starting on this house" notifications to tour participants.
 | Backend DSN | Railway env `SENTRY_DSN` |
 | Frontend DSN | Vercel env `NEXT_PUBLIC_SENTRY_DSN` |
 
+## Modal (measured floor plan, GPU worker)
+
+Optional v1.5 feature gated by `ENABLE_MEASURED_FLOORPLAN`. The Modal app `homeanalyzer-floorplan` runs Depth Anything V2 on tour videos; the backend dispatches via `modal.Function.from_name(...)`.
+
+| Credential | Where | Notes |
+|---|---|---|
+| Token ID / secret | Railway env `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | Generate at modal.com/settings/tokens. Same creds let `modal deploy` run locally. |
+| Feature flag | Railway env `ENABLE_MEASURED_FLOORPLAN=true` | Default false — backend returns 400 if unset. |
+| Modal Secret `huggingface` | Modal dashboard | Holds `HF_TOKEN`; required for first-time Depth Anything V2 download (cached to `floorplan-weights` Volume after that). |
+| Modal Secret `supabase-service-role` | Modal dashboard | Holds `SUPABASE_URL` + `SUPABASE_SECRET_KEY`. Worker uses these to download the tour video from the `tour-audio` bucket. |
+
+Deploy with `modal deploy modal_apps/floor_plan.py`. Smoke-test with `modal run modal_apps/floor_plan.py::smoke_test --house-id ... --video-storage-path ...`.
+
 ## Streaming URL token secret
 
 Signs the per-house WebSocket URL handed to Meeting BaaS. Rotate by changing on Railway only — does not need to match anything else.

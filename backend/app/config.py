@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Set false in Railway env to skip if costs bite.
     enable_vision_analysis: bool = True
 
+    # Measured floor plan reconstruction (Modal worker, MASt3R/Depth Anything).
+    # Default false — the pipeline is heavy and the schematic is fine for
+    # most users. Flip on per-deploy when you want to test it.
+    enable_measured_floorplan: bool = False
+    modal_token_id: str = ""
+    modal_token_secret: str = ""
+
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.
     resend_api_key: str = ""

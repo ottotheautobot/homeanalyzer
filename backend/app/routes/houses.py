@@ -55,6 +55,10 @@ class HouseOut(BaseModel):
     photo_signed_url: str | None = None
     synthesis_md: str | None
     floor_plan_json: dict | None = None
+    measured_floor_plan_json: dict | None = None
+    measured_floor_plan_status: str | None = None
+    measured_floor_plan_error: str | None = None
+    measured_floor_plan_started_at: datetime | None = None
 
 
 class TranscriptOut(BaseModel):

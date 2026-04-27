@@ -8,6 +8,10 @@ import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
 import { FloorPlanView } from "./floor-plan";
 import { LiveTour } from "./live-tour";
+import {
+  MeasuredFloorPlanControls,
+  MeasuredFloorPlanView,
+} from "./measured-floor-plan";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
@@ -183,8 +187,12 @@ export default async function HousePage({
               hasPlan={!!house.floor_plan_json}
             />
           </CardHeader>
-          <CardContent>
-            {house.floor_plan_json ? (
+          <CardContent className="space-y-4">
+            {house.measured_floor_plan_json &&
+            house.measured_floor_plan_status === "ready" &&
+            house.measured_floor_plan_json.rooms?.length ? (
+              <MeasuredFloorPlanView plan={house.measured_floor_plan_json} />
+            ) : house.floor_plan_json ? (
               <FloorPlanView plan={house.floor_plan_json} />
             ) : (
               <p className="text-sm text-zinc-500">
@@ -192,6 +200,11 @@ export default async function HousePage({
                 tour&apos;s transcript and observations.
               </p>
             )}
+            {house.video_url ? (
+              <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
+                <MeasuredFloorPlanControls house={house} />
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

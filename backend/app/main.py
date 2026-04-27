@@ -17,6 +17,7 @@ from app.routes import (
     debug,
     houses,
     invites,
+    measured_floorplan,
     me,
     realtime,
     streams,
@@ -51,6 +52,7 @@ app.include_router(realtime.router)
 app.include_router(webhooks.router)
 app.include_router(streams.router)
 app.include_router(compare.router)
+app.include_router(measured_floorplan.router)
 app.include_router(debug.router)
 
 
