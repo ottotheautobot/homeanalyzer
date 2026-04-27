@@ -50,3 +50,4 @@ Thumbs.db
 # Throwaway recovery scripts (run from local CLI against prod, never deploy)
 backend/recover.py
 backend/recover_*.py
+backend/backfill_*.py
