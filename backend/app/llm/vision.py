@@ -297,6 +297,67 @@ def _vision_call(
     return out
 
 
+def analyze_single_image(
+    jpeg_bytes: bytes, *, room_hint: str | None = None
+) -> list[VisualObservation]:
+    """Vision pass over a single user-snapped photo. Same prompt + tool as
+    the video pipeline, just one image. The room hint, if provided, is fed
+    in as text so Haiku doesn't have to guess.
+    """
+    if not jpeg_bytes:
+        return []
+    hint_text = (
+        f"This photo was taken in the {room_hint}." if room_hint else
+        "This is a single photo from a home tour."
+    )
+    frames = [(0.0, jpeg_bytes)]
+    # Reuse _vision_call wrapper but inject the hint as a leading text block.
+    content: list[dict] = [{"type": "text", "text": hint_text}]
+    content.append(
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": base64.b64encode(jpeg_bytes).decode("ascii"),
+            },
+        }
+    )
+    content.append(
+        {
+            "type": "text",
+            "text": (
+                "Call record_observations with everything notable in this "
+                "photo. Only one image — focus on quality, not quantity."
+            ),
+        }
+    )
+    try:
+        resp = _client().messages.create(
+            model=VISION_MODEL,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=[{"type": "text", "text": SYSTEM_PROMPT}],
+            tools=[OBSERVATIONS_TOOL],
+            tool_choice={"type": "tool", "name": "record_observations"},
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:
+        log.exception("single-image vision failed")
+        sentry_sdk.capture_exception(e)
+        return []
+    out: list[VisualObservation] = []
+    for block in resp.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and block.name == "record_observations"
+        ):
+            for o in (block.input or {}).get("observations") or []:
+                if room_hint and not o.get("room"):
+                    o["room"] = room_hint
+                out.append(o)
+    return out
+
+
 def analyze_video(mp4_bytes: bytes) -> list[VisualObservation]:
     """Top-level entry: extract frames + run vision over batches.
 

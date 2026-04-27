@@ -13,6 +13,7 @@ import {
   MeasuredFloorPlanView,
 } from "./measured-floor-plan";
 import { ObservationFeed } from "./observation-feed";
+import { PhotoNoteButton } from "./photo-note";
 import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
 import { RegenerateFloorPlan } from "./regenerate-floor-plan";
@@ -222,6 +223,7 @@ export default async function HousePage({
 
       <section className="space-y-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">Observations</h2>
+        <PhotoNoteButton houseId={house.id} />
         <ObservationFeed houseId={house.id} initial={observations} />
       </section>
 

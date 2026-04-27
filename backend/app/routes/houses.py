@@ -8,6 +8,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Response,
     UploadFile,
@@ -336,6 +337,76 @@ async def upload_house_photo(
         .execute()
     )
     return _to_house_out(res.data[0])
+
+
+class PhotoObservationOut(BaseModel):
+    observations_added: int
+    photo_storage_path: str
+
+
+@router.post(
+    "/houses/{house_id}/photo-observation",
+    response_model=PhotoObservationOut,
+)
+async def upload_photo_observation(
+    house_id: str,
+    photo: UploadFile = File(...),
+    room: str | None = Form(default=None),
+    user: AuthUser = Depends(current_user),
+) -> PhotoObservationOut:
+    """Snap a photo, get vision-extracted observations on the house brief.
+    Distinct from POST /houses/{id}/photo (which sets the curb-appeal photo).
+
+    Stored under {house_id}/notes/ — covered by the same delete cleanup."""
+    house = get_house_for_user(house_id, user.id)
+    photo_bytes = await photo.read()
+    if not photo_bytes:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty photo")
+    if len(photo_bytes) > 12 * 1024 * 1024:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Photo too large"
+        )
+
+    filename = photo.filename or "note.jpg"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "heic", "webp"):
+        ext = "jpg"
+    mime = photo.content_type or "image/jpeg"
+    storage_path = (
+        f"{house['id']}/notes/photo-{int(time.time())}-{uuid4().hex[:8]}.{ext}"
+    )
+
+    sb = supabase()
+    sb.storage.from_("tour-audio").upload(
+        path=storage_path,
+        file=photo_bytes,
+        file_options={"content-type": mime, "upsert": "true"},
+    )
+
+    from app.llm.vision import analyze_single_image
+
+    room_hint = room.strip().lower() if room and room.strip() else None
+    obs = analyze_single_image(photo_bytes, room_hint=room_hint)
+    if obs:
+        rows = [
+            {
+                "house_id": house["id"],
+                "user_id": user.id,
+                "room": o.get("room"),
+                "category": o.get("category", "note"),
+                "content": o["content"],
+                "severity": o.get("severity"),
+                "source": "user_photo_analysis",
+            }
+            for o in obs
+            if o.get("content")
+        ]
+        if rows:
+            sb.table("observations").insert(rows).execute()
+    return PhotoObservationOut(
+        observations_added=len(obs),
+        photo_storage_path=storage_path,
+    )
 
 
 @router.delete("/houses/{house_id}", status_code=status.HTTP_204_NO_CONTENT)
