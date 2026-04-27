@@ -560,6 +560,79 @@ def list_observations(
     return [ObservationOut(**o) for o in res.data]
 
 
+class RetryFinalizeOut(BaseModel):
+    ok: bool
+    detail: str
+    audio_url: str | None = None
+    video_url: str | None = None
+
+
+@router.post(
+    "/houses/{house_id}/retry-finalize", response_model=RetryFinalizeOut
+)
+async def retry_finalize(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> RetryFinalizeOut:
+    """Recover a tour where the post-meeting pipeline crashed before
+    persisting the audio/video uploads (e.g. the WAV-too-big incident).
+    Re-fetches the recording URLs from the meeting provider by bot_id and
+    re-runs the full finalize pipeline.
+
+    Will only work while the provider's S3 URLs are still alive — Meeting
+    BaaS's TTL is 4 hours after bot completion. Older tours are
+    unrecoverable from MB; the recordings are gone.
+    """
+    house = get_house_for_user(house_id, user.id)
+    bot_id = house.get("bot_id")
+    if not bot_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "House has no bot_id — there's nothing to recover. Re-record the tour.",
+        )
+
+    from app.providers.meetingbaas import get_meeting_provider
+    from app.routes.webhooks import run_post_meeting_pipeline
+
+    try:
+        completion = await get_meeting_provider().get_bot(bot_id)
+    except Exception as e:
+        log.exception("retry_finalize: provider get_bot failed for %s", bot_id)
+        sentry_sdk.capture_exception(e)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Couldn't reach the meeting provider: {e}",
+        )
+
+    if not completion or not (
+        completion.get("audio_url") or completion.get("video_url")
+    ):
+        return RetryFinalizeOut(
+            ok=False,
+            detail=(
+                "Meeting BaaS has no recording URLs for this bot anymore "
+                "(probably past the 4-hour TTL). The tour is unrecoverable."
+            ),
+        )
+
+    try:
+        run_post_meeting_pipeline(house, completion)
+    except Exception as e:
+        log.exception("retry_finalize pipeline crashed for house %s", house_id)
+        sentry_sdk.capture_exception(e)
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Pipeline failed: {e}",
+        )
+
+    fresh = get_house_for_user(house_id, user.id)
+    return RetryFinalizeOut(
+        ok=True,
+        detail="Pipeline re-ran. Synthesis + observations should populate shortly.",
+        audio_url=fresh.get("audio_url"),
+        video_url=fresh.get("video_url"),
+    )
+
+
 @router.post("/houses/{house_id}/regenerate-floorplan", response_model=HouseOut)
 def regenerate_floor_plan(
     house_id: str, user: AuthUser = Depends(current_user)

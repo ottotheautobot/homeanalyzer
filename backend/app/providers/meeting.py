@@ -62,3 +62,13 @@ class MeetingProvider(ABC):
 
         Returns None if this isn't a completion event.
         """
+
+    async def get_bot(self, bot_id: str) -> CompletionPayload | None:
+        """Re-fetch a bot's current state from the provider, returning a
+        CompletionPayload if the bot has finished. Used to recover stuck
+        post-meeting pipelines (e.g. when the original webhook handler
+        crashed before persisting). Default raises — subclasses opt in
+        if their provider supports it."""
+        raise NotImplementedError(
+            f"{type(self).__name__} doesn't support re-fetching bot state"
+        )

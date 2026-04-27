@@ -86,6 +86,64 @@ class MeetingBaasProvider(MeetingProvider):
         log.error("meetingbaas stop_bot failed: %s %s", r.status_code, r.text)
         r.raise_for_status()
 
+    async def get_bot(self, bot_id: str) -> CompletionPayload | None:
+        """GET /bots/{bot_id}/data — returns the bot's current data including
+        signed recording URLs (4h S3 TTL on MB v1). Returns None if MB has
+        no recording for this bot (404, recording purged, bot still running).
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{API_BASE}/bots/{bot_id}/data",
+                headers={AUTH_HEADER: settings.meetingbaas_api_key},
+            )
+        if r.status_code == 404:
+            return None
+        if r.status_code >= 400:
+            log.error(
+                "meetingbaas get_bot failed: %s %s", r.status_code, r.text
+            )
+            r.raise_for_status()
+        body = r.json()
+        # MB's GET shape varies between API versions. Walk a few common
+        # spots so we tolerate v1 quirks without crashing the recovery path.
+        candidate_blocks = [
+            body,
+            body.get("data") if isinstance(body, dict) else None,
+            body.get("bot_data") if isinstance(body, dict) else None,
+            body.get("bot") if isinstance(body, dict) else None,
+        ]
+        for block in candidate_blocks:
+            if not isinstance(block, dict):
+                continue
+            audio = (
+                block.get("audio_url")
+                or block.get("audio")
+                or block.get("mp3_url")
+            )
+            video = (
+                block.get("mp4_url")
+                or block.get("mp4")
+                or block.get("video_url")
+            )
+            transcript = (
+                block.get("transcript_url")
+                or block.get("transcription")
+            )
+            if audio or video or transcript:
+                return CompletionPayload(
+                    bot_id=str(bot_id),
+                    duration_seconds=block.get("duration_seconds"),
+                    audio_url=audio,
+                    video_url=video,
+                    transcript_url=transcript,
+                )
+        log.warning(
+            "get_bot for %s returned no recording URLs; raw keys=%s",
+            bot_id,
+            list(body.keys()) if isinstance(body, dict) else type(body).__name__,
+        )
+        return None
+
     def verify_webhook_signature(self, headers: dict, body: bytes) -> bool:
         if not settings.meetingbaas_webhook_secret:
             log.warning("MEETINGBAAS_WEBHOOK_SECRET not set; rejecting webhook")

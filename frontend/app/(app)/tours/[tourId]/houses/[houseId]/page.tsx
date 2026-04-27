@@ -16,6 +16,7 @@ import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
 import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
+import { RetryFinalize } from "./retry-finalize";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
@@ -166,6 +167,16 @@ export default async function HousePage({
           )}
         </CardContent>
       </Card>
+
+      {/* Recovery affordance: bot ran but post-meeting pipeline didn't
+          land — no audio, no synthesis, no observations. Surfaces
+          retry-finalize, which only works while MB still has the recording. */}
+      {house.bot_id &&
+      house.status === "completed" &&
+      !house.audio_url &&
+      !house.synthesis_md ? (
+        <RetryFinalize houseId={house.id} />
+      ) : null}
 
       {house.synthesis_md ? (
         <Card>

@@ -238,9 +238,6 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
     if not house:
         log.warning("bot.completed for unknown bot %s", bot_id)
         return
-    house_id = house["id"]
-    sb = supabase()
-
     completion = get_meeting_provider().parse_completion_webhook(payload)
     if not completion:
         log.warning(
@@ -249,6 +246,19 @@ def _finalize_inner(bot_id: str, payload: dict) -> None:
             list((payload.get("data") or {}).keys()),
         )
         return
+    run_post_meeting_pipeline(house, completion)
+
+
+def run_post_meeting_pipeline(house: dict, completion) -> None:
+    """Core post-meeting work given a normalized CompletionPayload.
+
+    Used by both the webhook handler (initial dispatch) and the manual
+    retry route (when an earlier finalize crashed before persisting,
+    e.g. the WAV-too-big incident from earlier today)."""
+    bot_id = str(completion.get("bot_id", ""))
+    house_id = house["id"]
+    sb = supabase()
+
     log.info(
         "_finalize parsed bot=%s audio=%s video=%s transcript=%s",
         bot_id,
