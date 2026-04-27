@@ -67,23 +67,21 @@ def _put_storage_object(
     url = (
         f"{settings.supabase_url.rstrip('/')}/storage/v1/object/tour-audio/{path}"
     )
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_secret_key}",
+        "apikey": settings.supabase_secret_key,
+        "Content-Type": content_type,
+        "x-upsert": "true",
+    }
+    timeout = httpx.Timeout(
+        connect=10.0, read=timeout_s, write=timeout_s, pool=10.0
+    )
     try:
-        r = httpx.post(
-            url,
-            content=content,
-            headers={
-                "Authorization": f"Bearer {settings.supabase_secret_key}",
-                "apikey": settings.supabase_secret_key,
-                "Content-Type": content_type,
-                "x-upsert": "true",
-            },
-            timeout=httpx.Timeout(
-                connect=10.0, read=timeout_s, write=timeout_s, pool=10.0
-            ),
-            # Force HTTP/1.1 — http2 connection-pool reuse is what's
-            # producing the stuck CLOSE_WAIT hangs we saw on long uploads.
-            http2=False,
-        )
+        # Force HTTP/1.1 — http2 connection-pool reuse is what produced the
+        # stuck CLOSE_WAIT hangs we saw on long uploads. http2 is a Client
+        # constructor arg, not a per-request kwarg, so use a fresh Client.
+        with httpx.Client(http2=False, timeout=timeout) as client:
+            r = client.post(url, content=content, headers=headers)
     except Exception as e:
         log.exception("storage upload %s threw (size=%d)", path, len(content))
         sentry_sdk.capture_exception(e)
