@@ -70,6 +70,26 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Parse a floor index from a schematic room label. Sonnet's labels
+ *  often carry "upstairs"/"first-floor"/"main floor" hints; default 1
+ *  when ambiguous. Used so schematic-only rooms still land on the
+ *  right floor tab when the measured pipeline detected multi-story. */
+export function inferFloorFromLabel(label: string | null | undefined): number {
+  const k = (label || "").toLowerCase();
+  if (
+    /\b(2nd|second)[\s-]?floor\b/.test(k) ||
+    /\bupstairs\b/.test(k) ||
+    /\bupper[\s-]?floor\b/.test(k)
+  ) {
+    return 2;
+  }
+  if (/\b3rd[\s-]?floor\b/.test(k) || /\bthird[\s-]?floor\b/.test(k)) {
+    return 3;
+  }
+  // first-floor / main floor / ground floor → 1; also the default.
+  return 1;
+}
+
 /**
  * Cohesive union of the two data sources into one floor plan.
  *
@@ -109,7 +129,11 @@ export function mergeFloorPlans(
     if (!schematic) return null;
     return {
       ...schematic,
-      rooms: schematic.rooms.map((r) => ({ ...r, source: "estimate" })),
+      rooms: schematic.rooms.map((r) => ({
+        ...r,
+        source: "estimate",
+        floor: inferFloorFromLabel(r.label),
+      })),
     };
   }
 
@@ -178,10 +202,16 @@ export function mergeFloorPlans(
         width_ft: Math.max(1, Math.round(match.width_m * M_TO_FT)),
         depth_ft: Math.max(1, Math.round(match.depth_m * M_TO_FT)),
         source: "verified",
-        floor: match.floor ?? 1,
+        // Prefer measured's floor (geometric truth); fall back to
+        // parsing the schematic label for upstairs/first-floor hints.
+        floor: match.floor ?? inferFloorFromLabel(sr.label),
       });
     } else {
-      rooms.push({ ...sr, source: "estimate", floor: 1 });
+      rooms.push({
+        ...sr,
+        source: "estimate",
+        floor: inferFloorFromLabel(sr.label),
+      });
     }
   }
 
