@@ -1572,7 +1572,7 @@ def _label_clusters_via_vision(rooms_raw, frames, log) -> list[str]:
             log.exception("vision label call failed for cluster %s", r["cluster_id"])
             label = f"room {r['cluster_id'] + 1}"
         out.append(label)
-        log.info("cluster %d -> '%s'", r["cluster_id"], label)
+        log.info("cluster %s -> '%s'", r["cluster_id"], label)
     return out
 
 
@@ -1583,9 +1583,10 @@ def _detect_doors_from_trajectory(cam_xy, cluster_frames, rooms_out, log):
 
     if len(rooms_out) < 2:
         return []
-    # Build per-frame cluster id.
+    # Build per-frame cluster id. Cluster ids are opaque (now strings like
+    # "f1.c0" with multi-story segmentation), so use None for "no cluster".
     n = len(cam_xy)
-    frame_cluster = [-1] * n
+    frame_cluster: list = [None] * n
     cluster_to_idx = {}
     for cid, frames in cluster_frames.items():
         cluster_to_idx[cid] = next(
@@ -1599,7 +1600,7 @@ def _detect_doors_from_trajectory(cam_xy, cluster_frames, rooms_out, log):
     for i in range(1, n):
         a = frame_cluster[i - 1]
         b = frame_cluster[i]
-        if a < 0 or b < 0 or a == b:
+        if a is None or b is None or a == b:
             continue
         ai = cluster_to_idx.get(a)
         bi = cluster_to_idx.get(b)
