@@ -203,7 +203,7 @@ def reconstruct_floor_plan(
             # Tag the model version with the primitive so we can filter rerun
             # candidates later without re-deriving from stats.
             plan["model_version"] = (
-                f"{primitive}-intrinsic.v2.0"
+                f"{primitive}-intrinsic.v2.1"
                 if primitive == "vggt"
                 else plan.get("model_version", "mast3r-intrinsic.v1.8")
             )
@@ -920,7 +920,7 @@ def _compute_cluster_room(
         cpts = cpts[keep]
 
     if cpts.shape[0] >= 200:
-        polygon, w_m, d_m = _axis_aligned_bbox(cpts[:, :2])
+        polygon, w_m, d_m = _concave_room_polygon(cpts[:, :2], log)
         confidence = 0.75 if len(frame_idxs) >= 4 else 0.5
         source = "wall-points"
     else:
@@ -955,9 +955,97 @@ def _compute_cluster_room(
     }
 
 
+def _concave_room_polygon(xy, log) -> tuple[list, float, float]:
+    """Concave hull around 2D wall-height points — produces a polygon that
+    actually hugs the room shape (L-shapes, alcoves, angled walls) instead
+    of an axis-aligned rectangle.
+
+    Pipeline:
+      1. Voxel-downsample to a 10cm grid so we don't choke shapely on the
+         hundreds of thousands of points VGGT typically produces.
+      2. shapely.concave_hull(ratio=0.15) — small ratio means a tight
+         concave hull. ratio=1 would give the convex hull.
+      3. Douglas-Peucker simplify at 8cm so a 6-vertex L-shape doesn't
+         ship as 200 jaggy edges.
+
+    Falls back to axis-aligned bbox if shapely fails or the hull is
+    degenerate (line / single point / empty).
+    Returns (polygon_corners, width_m, depth_m). Width/depth are the
+    bounds-of-polygon dims — used downstream for the size-based
+    confidence checks (which still operate on a rectangle envelope)."""
+    import numpy as np
+
+    if len(xy) < 4:
+        return _bbox_from_camera_path(xy)
+
+    cell = 0.10
+    cells = np.floor(np.asarray(xy) / cell).astype(np.int64)
+    _, unique_idx = np.unique(cells, axis=0, return_index=True)
+    xy_ds = np.asarray(xy)[unique_idx]
+    if len(xy_ds) < 4:
+        return _axis_aligned_bbox(xy)
+
+    try:
+        from shapely import concave_hull, simplify
+        from shapely.geometry import MultiPoint
+
+        mp = MultiPoint(xy_ds.tolist())
+        hull = concave_hull(mp, ratio=0.15)
+        if hull.is_empty or hull.geom_type != "Polygon":
+            log.info(
+                "concave_hull produced %s; falling back to axis-aligned bbox",
+                hull.geom_type,
+            )
+            return _axis_aligned_bbox(xy)
+        # Simplify so a typical room comes out as ~5–12 vertices, not 200.
+        hull = simplify(hull, tolerance=0.08, preserve_topology=True)
+        coords = list(hull.exterior.coords)
+        if len(coords) > 1 and coords[0] == coords[-1]:
+            coords = coords[:-1]
+        if len(coords) < 3:
+            return _axis_aligned_bbox(xy)
+        polygon = [[float(x), float(y)] for x, y in coords]
+        minx, miny, maxx, maxy = hull.bounds
+        log.info(
+            "concave hull: %d vertices, bbox %.2fx%.2fm, area=%.1fm²",
+            len(polygon),
+            float(maxx - minx),
+            float(maxy - miny),
+            float(hull.area),
+        )
+        return polygon, float(maxx - minx), float(maxy - miny)
+    except Exception as e:
+        log.warning("concave hull failed (%s); falling back to bbox", e)
+        return _axis_aligned_bbox(xy)
+
+
+def _polygon_iou(poly_a, poly_b) -> float:
+    """True polygon IoU using shapely. Used by the overlap-merge pass —
+    bbox IoU under-reports for L-shaped or angled rooms because the bbox
+    of an L-room is much bigger than the L itself."""
+    try:
+        from shapely.geometry import Polygon
+
+        a = Polygon(poly_a)
+        b = Polygon(poly_b)
+        if not (a.is_valid and b.is_valid):
+            a = a.buffer(0)
+            b = b.buffer(0)
+        if a.is_empty or b.is_empty or a.area == 0 or b.area == 0:
+            return 0.0
+        inter = a.intersection(b).area
+        if inter <= 0:
+            return 0.0
+        union = a.union(b).area
+        return float(inter / max(union, 1e-9))
+    except Exception:
+        return 0.0
+
+
 def _bbox_iou(poly_a, poly_b) -> float:
-    """IoU of two axis-aligned bboxes given as 4-corner polygons in the
-    Manhattan frame."""
+    """Legacy axis-aligned IoU. Kept for callers that explicitly want the
+    bbox envelope behavior (e.g. checking if two rooms' bounding rectangles
+    overlap, regardless of their actual shape)."""
     import numpy as np
 
     a = np.array(poly_a, dtype=float)
@@ -1013,7 +1101,7 @@ def _merge_overlapping_clusters(
         best_pair = None
         for i in range(len(rooms)):
             for j in range(i + 1, len(rooms)):
-                iou = _bbox_iou(rooms[i]["polygon_m"], rooms[j]["polygon_m"])
+                iou = _polygon_iou(rooms[i]["polygon_m"], rooms[j]["polygon_m"])
                 if iou <= _OVERLAP_IOU_THR:
                     continue
                 ca = _cluster_centroid(rooms[i], aligned_cams)
