@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   MessageCircle,
   Quote,
+  Video,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -144,6 +145,14 @@ export function ObservationFeed({
                   <span className="font-medium uppercase tracking-wide">
                     {meta.label}
                   </span>
+                  {obs.source === "photo_analysis" ? (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-primary"
+                      title="From video analysis"
+                    >
+                      <Video className="size-3" strokeWidth={2.25} />
+                    </span>
+                  ) : null}
                   {obs.room ? (
                     <span className="truncate">· {obs.room}</span>
                   ) : null}
