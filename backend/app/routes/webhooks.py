@@ -54,6 +54,51 @@ def _download_to_storage(url: str, house_id: str, suffix: str) -> str | None:
     return path
 
 
+def _put_storage_object(
+    path: str, content: bytes, content_type: str, timeout_s: float = 300.0
+) -> bool:
+    """Upload to Supabase Storage via the REST API with explicit timeouts.
+
+    storage3's internal httpx client has no exposed timeout, so a stalled
+    HTTP/2 stream (server half-close, slow upload) will hang the whole
+    pipeline indefinitely. Direct httpx call lets us bound it.
+
+    Returns True on success."""
+    url = (
+        f"{settings.supabase_url.rstrip('/')}/storage/v1/object/tour-audio/{path}"
+    )
+    try:
+        r = httpx.post(
+            url,
+            content=content,
+            headers={
+                "Authorization": f"Bearer {settings.supabase_secret_key}",
+                "apikey": settings.supabase_secret_key,
+                "Content-Type": content_type,
+                "x-upsert": "true",
+            },
+            timeout=httpx.Timeout(
+                connect=10.0, read=timeout_s, write=timeout_s, pool=10.0
+            ),
+            # Force HTTP/1.1 — http2 connection-pool reuse is what's
+            # producing the stuck CLOSE_WAIT hangs we saw on long uploads.
+            http2=False,
+        )
+    except Exception as e:
+        log.exception("storage upload %s threw (size=%d)", path, len(content))
+        sentry_sdk.capture_exception(e)
+        return False
+    if r.status_code >= 400:
+        log.error(
+            "storage upload %s failed: %s %s",
+            path,
+            r.status_code,
+            r.text[:200],
+        )
+        return False
+    return True
+
+
 def _compress_wav_to_opus(wav_bytes: bytes) -> bytes | None:
     """Re-encode a WAV to opus-in-ogg via ffmpeg. ~12x smaller for typical
     tour audio (24 kHz mono speech). Returns None on any ffmpeg failure so
@@ -131,16 +176,7 @@ def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
         upload_bytes = content
         upload_mime = "audio/wav"
 
-    sb = supabase()
-    try:
-        sb.storage.from_("tour-audio").upload(
-            path=path,
-            file=upload_bytes,
-            file_options={"content-type": upload_mime, "upsert": "true"},
-        )
-    except Exception as e:
-        log.exception("audio upload to storage failed")
-        sentry_sdk.capture_exception(e)
+    if not _put_storage_object(path, upload_bytes, upload_mime, timeout_s=180.0):
         # Still return the in-memory bytes so synthesis can run from RAM
         # even if archival failed — better partial success than nothing.
         return None, content
@@ -148,7 +184,13 @@ def _download_audio(url: str, house_id: str) -> tuple[str | None, bytes | None]:
 
 
 def _download_video(url: str, house_id: str) -> tuple[str | None, bytes | None]:
-    """Download video + upload to storage. Returns (path, bytes)."""
+    """Download video + upload to storage. Returns (path, bytes).
+
+    Upload is wrapped in try/except — if it fails (storage limits,
+    transient http2 connection issues), we still return the in-memory
+    bytes so the rest of the post-meeting pipeline (vision analysis,
+    floor plan reconstruction) can run from RAM. Recording playback
+    in the UI breaks for that house, but everything else works."""
     try:
         with httpx.stream("GET", url, timeout=600.0, follow_redirects=True) as r:
             r.raise_for_status()
@@ -159,12 +201,9 @@ def _download_video(url: str, house_id: str) -> tuple[str | None, bytes | None]:
         return None, None
 
     path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.mp4"
-    sb = supabase()
-    sb.storage.from_("tour-audio").upload(
-        path=path,
-        file=content,
-        file_options={"content-type": "video/mp4", "upsert": "true"},
-    )
+    # Video uploads can be hundreds of MB, give the write a longer ceiling.
+    if not _put_storage_object(path, content, "video/mp4", timeout_s=600.0):
+        return None, content
     return path, content
 
 
