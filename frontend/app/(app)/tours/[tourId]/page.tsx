@@ -15,6 +15,7 @@ import type { House, Tour, TourInvite } from "@/lib/types";
 import { InviteForm } from "./invite-form";
 import { InviteRow } from "./invite-row";
 import { NewHouseForm } from "./new-house-form";
+import { ShareControl } from "./share-control";
 import { SwipeableHouseRow } from "./swipeable-house-row";
 
 export default async function TourPage({
@@ -104,6 +105,15 @@ export default async function TourPage({
                 ))}
               </ul>
             ) : null}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-medium">Share</h2>
+        <Card>
+          <CardContent className="pt-6">
+            <ShareControl tourId={tour.id} />
           </CardContent>
         </Card>
       </section>

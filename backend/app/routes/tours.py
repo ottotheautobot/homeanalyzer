@@ -1,5 +1,6 @@
 import logging
-from datetime import datetime
+import secrets
+from datetime import datetime, timezone
 
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -147,6 +148,70 @@ def list_tours(user: AuthUser = Depends(current_user)) -> list[TourSummary]:
 @router.get("/{tour_id}", response_model=TourOut)
 def get_tour(tour_id: str, user: AuthUser = Depends(current_user)) -> TourOut:
     return TourOut(**_get_tour_for_user(tour_id, user.id))
+
+
+class ShareOut(BaseModel):
+    share_token: str | None
+    shared_at: datetime | None
+
+
+@router.post("/{tour_id}/share", response_model=ShareOut)
+def create_share_link(
+    tour_id: str, user: AuthUser = Depends(current_user)
+) -> ShareOut:
+    """Mint (or rotate) a share token for the tour. Owner only."""
+    tour = _get_tour_for_user(tour_id, user.id)
+    if tour["owner_user_id"] != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the tour owner can share"
+        )
+    token = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc).isoformat()
+    sb = supabase()
+    sb.table("tours").update(
+        {"share_token": token, "shared_at": now}
+    ).eq("id", tour_id).execute()
+    return ShareOut(share_token=token, shared_at=datetime.fromisoformat(now))
+
+
+@router.delete("/{tour_id}/share", response_model=ShareOut)
+def revoke_share_link(
+    tour_id: str, user: AuthUser = Depends(current_user)
+) -> ShareOut:
+    tour = _get_tour_for_user(tour_id, user.id)
+    if tour["owner_user_id"] != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the tour owner can revoke"
+        )
+    sb = supabase()
+    sb.table("tours").update(
+        {"share_token": None, "shared_at": None}
+    ).eq("id", tour_id).execute()
+    return ShareOut(share_token=None, shared_at=None)
+
+
+@router.get("/{tour_id}/share", response_model=ShareOut)
+def get_share_link(
+    tour_id: str, user: AuthUser = Depends(current_user)
+) -> ShareOut:
+    tour = _get_tour_for_user(tour_id, user.id)
+    if tour["owner_user_id"] != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the tour owner can view shares"
+        )
+    sb = supabase()
+    res = (
+        sb.table("tours")
+        .select("share_token, shared_at")
+        .eq("id", tour_id)
+        .single()
+        .execute()
+    )
+    row = res.data or {}
+    return ShareOut(
+        share_token=row.get("share_token"),
+        shared_at=row.get("shared_at"),
+    )
 
 
 @router.delete("/{tour_id}", status_code=status.HTTP_204_NO_CONTENT)
