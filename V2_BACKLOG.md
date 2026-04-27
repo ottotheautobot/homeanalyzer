@@ -52,6 +52,7 @@ Items deliberately deferred from v1 build. Revisit after Florida trip if the pro
 - **Test suite.** Pytest for backend (especially the extraction prompt — golden-file tests), Playwright for frontend critical paths.
 - **Observability beyond Sentry.** Structured logging, OpenTelemetry traces for the transcript-to-observation pipeline, alerting on extraction failures.
 - **Migration to Anthropic Bedrock or Vertex AI.** If commercial scale is reached, enterprise customers may require AWS-native or GCP-native LLM access. Already abstracted via Anthropic SDK; should be straightforward.
+- **`serverFetch` should redirect to /login on missing session, not throw.** When the layout's `getUser()` succeeds but `getSession()` returns null mid-refresh (Supabase SSR race, hits Mobile Safari more often), the page throws "Not authenticated" → 500 instead of bouncing to login. Single occurrence so far but UX-jarring. Fix: in `frontend/lib/api-server.ts`, replace `throw new BackendError(401, ...)` with `redirect('/login')` for the no-token case so it mirrors the layout. Also worth a server-side sweep if it recurs to confirm proxy.ts middleware is running on every request.
 
 ## Research / exploration
 
