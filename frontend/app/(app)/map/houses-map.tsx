@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Map, Marker, ZoomControl } from "pigeon-maps";
+import { Map, Overlay, ZoomControl } from "pigeon-maps";
 
 import type { HouseMapPin } from "./page";
 
@@ -68,14 +68,45 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
           attribution={false}
         >
           <ZoomControl />
-          {pins.map((p) => (
-            <Marker
-              key={p.id}
-              anchor={[p.latitude, p.longitude]}
-              onClick={() => setSelected(p.id === selected ? null : p.id)}
-              color={scoreColor(p.overall_score)}
-            />
-          ))}
+          {pins.map((p) => {
+            const isSelected = p.id === selected;
+            // Overlay with an explicit button instead of the default
+            // <Marker>: bigger tap target and stopPropagation so the map's
+            // pan/drag gesture can't eat the touch event on mobile.
+            return (
+              <Overlay
+                key={p.id}
+                anchor={[p.latitude, p.longitude]}
+                offset={[14, 14]}
+              >
+                <button
+                  type="button"
+                  aria-label={p.address}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelected(isSelected ? null : p.id);
+                  }}
+                  onTouchEnd={(e) => {
+                    // iOS Safari sometimes misses synthetic clicks after a
+                    // brief tap — handle the touch directly. preventDefault
+                    // stops the synthesized click from double-firing.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelected(isSelected ? null : p.id);
+                  }}
+                  className="block rounded-full border-2 border-white dark:border-zinc-100 shadow-md transition-transform active:scale-95"
+                  style={{
+                    backgroundColor: scoreColor(p.overall_score),
+                    width: isSelected ? 36 : 28,
+                    height: isSelected ? 36 : 28,
+                    boxShadow: isSelected
+                      ? "0 0 0 3px rgba(99, 102, 241, 0.5)"
+                      : "0 1px 3px rgba(0, 0, 0, 0.3)",
+                  }}
+                />
+              </Overlay>
+            );
+          })}
         </Map>
       </div>
 
