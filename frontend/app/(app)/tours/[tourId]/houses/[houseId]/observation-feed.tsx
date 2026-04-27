@@ -233,95 +233,30 @@ export function ObservationFeed({
   );
 }
 
-function FrameStill({
+function VideoClip({
   videoUrl,
   timestamp,
 }: {
   videoUrl: string;
   timestamp: number;
 }) {
-  // Strategy: load the video element, seek to the timestamp, capture the
-  // frame to a canvas, and render as <img>. Falls back to showing the
-  // paused video if canvas drawing is blocked by CORS taint (Supabase
-  // signed URLs return permissive CORS headers, so canvas should work
-  // in practice).
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
-  const [tainted, setTainted] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  function captureFrame() {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        setError("Canvas unavailable");
-        return;
-      }
-      ctx.drawImage(video, 0, 0);
-      // toDataURL throws SecurityError if the canvas is tainted by a
-      // cross-origin video without proper CORS headers.
-      setImgSrc(canvas.toDataURL("image/jpeg", 0.85));
-    } catch {
-      setTainted(true);
-    }
-  }
-
-  if (imgSrc) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={imgSrc}
-        alt={`Frame at ${timestamp.toFixed(1)}s`}
-        className="w-full max-w-sm rounded-md border border-zinc-200 dark:border-zinc-800"
-      />
-    );
-  }
-
-  // Either still capturing, or canvas got tainted and we have to show the
-  // paused video element directly. In the tainted case the video shows
-  // the frame visually but we can't extract it to an <img>.
+  // recall_timestamp from the vision pipeline pins to one frame, but the
+  // observation was extracted from a batch of ~30 frames — so the exact
+  // detail might land on neighboring sampled frames, not that one.
+  // Show a wider window (-2s to +5s) the user can scrub through.
+  const start = Math.max(0, timestamp - 2);
+  const end = timestamp + 5;
   return (
-    <>
-      <video
-        ref={videoRef}
-        // crossOrigin="anonymous" enables canvas drawImage without taint
-        // when the storage host returns Access-Control-Allow-Origin.
-        crossOrigin={tainted ? undefined : "anonymous"}
-        src={videoUrl}
-        preload="auto"
-        muted
-        playsInline
-        controls={tainted}
-        onLoadedMetadata={(e) => {
-          e.currentTarget.currentTime = Math.max(0, timestamp);
-        }}
-        onSeeked={() => {
-          if (!tainted) captureFrame();
-        }}
-        onError={() => setError("Couldn't load video frame")}
-        className={
-          tainted
-            ? "w-full max-w-sm rounded-md border border-zinc-200 dark:border-zinc-800 bg-black"
-            : "absolute size-1 opacity-0 pointer-events-none"
-        }
-        // hide off-screen until we either capture (then we render <img>)
-        // or detect taint (then we let the video element render visibly)
-        aria-hidden={!tainted}
-      />
-      {!tainted && !error ? (
-        <p className="text-xs text-zinc-500 inline-flex items-center gap-1.5">
-          <Loader2 className="size-3 animate-spin" /> Capturing frame…
-        </p>
-      ) : null}
-      {error ? (
-        <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
-      ) : null}
-    </>
+    <video
+      src={`${videoUrl}#t=${start},${end}`}
+      autoPlay
+      muted
+      loop
+      controls
+      playsInline
+      preload="metadata"
+      className="w-full max-w-sm rounded-md border border-zinc-200 dark:border-zinc-800 bg-black"
+    />
   );
 }
 
@@ -378,7 +313,7 @@ function EvidenceDisclosure({
               No video archived for this house — can&apos;t show evidence.
             </p>
           ) : resolvedUrl ? (
-            <FrameStill
+            <VideoClip
               key={resolvedUrl + timestamp}
               videoUrl={resolvedUrl}
               timestamp={timestamp}
