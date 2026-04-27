@@ -44,5 +44,5 @@ Thumbs.db
 # Sentry
 .sentryclirc
 
-# Claude Code per-machine settings
-.claude/settings.local.json
+# Claude Code per-machine settings + session artifacts
+.claude/
