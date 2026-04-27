@@ -6,11 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
+import { mergeMeasuredIntoSchematic } from "@/lib/floor-plan-merge";
+
 import { FloorPlanView } from "./floor-plan";
 import { LiveTour } from "./live-tour";
 import {
   MeasuredFloorPlanControls,
-  MeasuredFloorPlanView,
 } from "./measured-floor-plan";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
@@ -197,18 +198,34 @@ export default async function HousePage({
             <CardTitle className="text-base">Layout</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {house.measured_floor_plan_json &&
-            house.measured_floor_plan_status === "ready" &&
-            house.measured_floor_plan_json.rooms?.length ? (
-              <MeasuredFloorPlanView plan={house.measured_floor_plan_json} />
-            ) : house.floor_plan_json ? (
-              <FloorPlanView plan={house.floor_plan_json} />
-            ) : (
-              <p className="text-sm text-zinc-500">
-                Generating layout from this tour&apos;s transcript and
-                observations…
-              </p>
-            )}
+            {(() => {
+              const measuredReady =
+                house.measured_floor_plan_json &&
+                house.measured_floor_plan_status === "ready" &&
+                house.measured_floor_plan_json.rooms?.length;
+              if (measuredReady) {
+                // One renderer (schematic-style: rectangles + labels +
+                // dimensions + door gaps) but powered by measured data
+                // when we have it. Schematic provides per-room features
+                // (transcript-derived) when labels match.
+                const merged = mergeMeasuredIntoSchematic(
+                  house.measured_floor_plan_json!,
+                  house.floor_plan_json,
+                );
+                return <FloorPlanView plan={merged} source="measured" />;
+              }
+              if (house.floor_plan_json) {
+                return (
+                  <FloorPlanView plan={house.floor_plan_json} source="schematic" />
+                );
+              }
+              return (
+                <p className="text-sm text-zinc-500">
+                  Generating layout from this tour&apos;s transcript and
+                  observations…
+                </p>
+              );
+            })()}
             {house.video_url ? (
               <MeasuredFloorPlanControls house={house} />
             ) : null}

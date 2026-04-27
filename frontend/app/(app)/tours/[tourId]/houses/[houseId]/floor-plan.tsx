@@ -236,7 +236,17 @@ function placeRooms(plan: FloorPlan): Layout {
   return { rooms: placements, doors, width: totalW, height: totalH };
 }
 
-export function FloorPlanView({ plan }: { plan: FloorPlan }) {
+export function FloorPlanView({
+  plan,
+  source = "schematic",
+}: {
+  plan: FloorPlan;
+  /** "measured" when the plan is fed by the MASt3R/VGGT pipeline (real
+   *  per-room dimensions); "schematic" when it's the LLM-estimated
+   *  Sonnet output. Changes the disclaimer banner + drops the `≈`
+   *  prefix on per-room dimensions. */
+  source?: "schematic" | "measured";
+}) {
   const layout = useMemo(() => placeRooms(plan), [plan]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -250,12 +260,20 @@ export function FloorPlanView({ plan }: { plan: FloorPlan }) {
 
   const pill = CONFIDENCE_PILL[plan.confidence];
   const selected = layout.rooms.find((r) => r.id === selectedId);
+  const isMeasured = source === "measured";
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-        Rough estimate, not a measured plan. Room sizes are guessed from the
-        transcript — treat with skepticism.
+      <div
+        className={
+          isMeasured
+            ? "rounded-md border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-900 dark:text-emerald-200"
+            : "rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+        }
+      >
+        {isMeasured
+          ? "Measured from the tour video. Dimensions reflect what the camera saw — adjacency reflects which rooms the camera moved between."
+          : "Rough estimate, not a measured plan. Room sizes are guessed from the transcript — treat with skepticism."}
       </div>
 
       <div className="flex items-center gap-2 text-xs">
@@ -283,7 +301,9 @@ export function FloorPlanView({ plan }: { plan: FloorPlan }) {
             const isSelected = room.id === selectedId;
             const dim =
               room.width_ft && room.depth_ft
-                ? `≈${room.width_ft}×${room.depth_ft}′`
+                ? isMeasured
+                  ? `${room.width_ft}×${room.depth_ft}′`
+                  : `≈${room.width_ft}×${room.depth_ft}′`
                 : null;
             return (
               <g
@@ -349,7 +369,9 @@ export function FloorPlanView({ plan }: { plan: FloorPlan }) {
             {selected.label}
             {selected.width_ft && selected.depth_ft ? (
               <span className="ml-2 text-xs text-zinc-500 font-normal">
-                ≈ {selected.width_ft}×{selected.depth_ft} ft (estimate)
+                {isMeasured ? "" : "≈ "}
+                {selected.width_ft}×{selected.depth_ft} ft
+                {isMeasured ? " (measured)" : " (estimate)"}
               </span>
             ) : null}
           </h3>
