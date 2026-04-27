@@ -269,28 +269,74 @@ export function MeasuredFloorPlanControls({
     },
   });
 
+  const cancel = useMutation({
+    mutationFn: async (): Promise<House> =>
+      clientFetch<House>(`/houses/${house.id}/measure-floorplan`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      setError(null);
+      router.refresh();
+    },
+    onError: (e) => {
+      setError(e instanceof Error ? e.message : "Failed");
+    },
+  });
+
   const status = house.measured_floor_plan_status;
   const isPending = status === "pending" || start.isPending;
   const hasFailed = status === "failed";
   const startedAt = house.measured_floor_plan_started_at
     ? new Date(house.measured_floor_plan_started_at)
     : null;
+  // 20+ min in pending = the worker thread almost certainly died. Surface
+  // an unstick affordance instead of leaving the user staring at a spinner.
+  const stalePending =
+    status === "pending" &&
+    startedAt !== null &&
+    Date.now() - startedAt.getTime() > 20 * 60 * 1000;
 
   return (
     <div className="space-y-2">
       {isPending ? (
-        <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40 p-3 flex items-center gap-3">
-          <Loader2 className="size-4 animate-spin text-primary shrink-0" />
-          <div className="text-sm">
-            <div className="font-medium">Measuring layout from video…</div>
-            <div className="text-xs text-zinc-500">
-              Reconstructing camera path and room geometry on a GPU. Usually
-              5–15 minutes.
-              {startedAt
-                ? ` Started ${startedAt.toLocaleTimeString()}.`
-                : ""}
+        <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/40 p-3 space-y-2">
+          <div className="flex items-center gap-3">
+            <Loader2 className="size-4 animate-spin text-primary shrink-0" />
+            <div className="text-sm min-w-0 flex-1">
+              <div className="font-medium">
+                {stalePending ? "Measurement seems stuck" : "Measuring layout from video…"}
+              </div>
+              <div className="text-xs text-zinc-500">
+                {stalePending
+                  ? "Started over 20 minutes ago — the GPU job most likely died on a worker restart. Cancel to clear, or retry to start fresh."
+                  : "Reconstructing camera path and room geometry on a GPU. Usually 5–15 minutes."}
+                {startedAt
+                  ? ` Started ${startedAt.toLocaleTimeString()}.`
+                  : ""}
+              </div>
             </div>
           </div>
+          {stalePending ? (
+            <div className="flex flex-wrap gap-2 pl-7">
+              <Button
+                onClick={() => start.mutate()}
+                disabled={start.isPending || cancel.isPending}
+                size="sm"
+                variant="secondary"
+              >
+                <RefreshCcw className="size-3.5 mr-1.5" />
+                Retry
+              </Button>
+              <Button
+                onClick={() => cancel.mutate()}
+                disabled={start.isPending || cancel.isPending}
+                size="sm"
+                variant="ghost"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : (
         <Button

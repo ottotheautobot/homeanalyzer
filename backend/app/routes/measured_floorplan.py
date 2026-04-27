@@ -166,3 +166,29 @@ def measured_status(
         error=house.get("measured_floor_plan_error"),
         plan=house.get("measured_floor_plan_json"),
     )
+
+
+@router.delete(
+    "/houses/{house_id}/measure-floorplan", response_model=HouseOut
+)
+def cancel_measure_floorplan(
+    house_id: str, user: AuthUser = Depends(current_user)
+) -> HouseOut:
+    """Clear the pending/failed status without spawning a new Modal job.
+
+    Used to break out of stuck-pending states (Railway restart killed the
+    background thread; user wants the UI clean without re-running the
+    GPU job)."""
+    get_house_for_user(house_id, user.id)
+    sb = supabase()
+    sb.table("houses").update(
+        {
+            "measured_floor_plan_status": None,
+            "measured_floor_plan_error": None,
+            "measured_floor_plan_started_at": None,
+        }
+    ).eq("id", house_id).execute()
+    fresh = (
+        sb.table("houses").select("*").eq("id", house_id).limit(1).execute()
+    )
+    return _to_house_out(fresh.data[0])
