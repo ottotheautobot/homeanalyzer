@@ -41,7 +41,9 @@ def compare_houses(houses: list[dict], observations_by_house: dict[str, list[dic
         score = h.get("overall_score")
         meta_bits = []
         if h.get("list_price") is not None:
-            meta_bits.append(f"${int(h['list_price']):,}")
+            kind = h.get("price_kind") or "sale"
+            suffix = "/mo" if kind == "rent" else ""
+            meta_bits.append(f"${int(h['list_price']):,}{suffix}")
         if h.get("beds") is not None:
             meta_bits.append(f"{h['beds']} bd")
         if h.get("baths") is not None:

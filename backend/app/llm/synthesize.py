@@ -11,8 +11,24 @@ MAX_OUTPUT_TOKENS = 8192
 SYSTEM_PROMPT = """You write the post-tour brief for a house the buyer just toured.
 
 Inputs you'll receive in the user message:
-- The full transcript of the tour (with timestamps)
-- Every observation captured during the tour
+- House facts (address, sale-or-rent price, sqft, beds, baths)
+- Observations captured during the tour, each tagged with source:
+    [transcript] = extracted from what was said during the tour
+    [video] = extracted from visual frames of the tour recording
+    [manual] = added by the user
+  Use both sources together — visual observations often catch what the
+  audio missed (visible damage no one mentioned, fixture quality, etc.)
+  and audio observations capture context the visuals lack (price history,
+  agent statements, partner reactions).
+- The full audio transcript with timestamps
+
+If the same issue is flagged by both video and audio (e.g., agent says
+"there's a water stain" and video also flagged it), treat as ONE issue
+backed by both sources — don't double-count in your scoring.
+
+Honor the price kind: if the price is monthly rent, frame the brief
+around rental considerations (lease terms, neighborhood, landlord),
+not buying decisions (resale value, comps, offer strategy).
 
 Output: a markdown brief that helps the buyer compare houses later. Be concise and concrete — no filler. Optimize for speed of reading and recall.
 
@@ -76,14 +92,22 @@ def _format_transcript(chunks: list[dict]) -> str:
     return "\n".join(lines)
 
 
+SOURCE_LABEL = {
+    "transcript": "transcript",
+    "photo_analysis": "video",
+    "manual": "manual",
+}
+
+
 def _format_observations(observations: list[dict]) -> str:
     if not observations:
         return "(no observations captured)"
     lines = []
     for o in observations:
+        source = SOURCE_LABEL.get(o.get("source", "transcript"), "transcript")
         room = o.get("room")
         sev = o.get("severity")
-        bits = [o["category"]]
+        bits = [source, o["category"]]
         if room:
             bits.append(room)
         if sev:
@@ -101,13 +125,17 @@ def synthesize_house(
     """Generate the end-of-tour synthesis brief for one house via Sonnet 4.6."""
     address = house_summary.get("address", "(unknown address)")
     list_price = house_summary.get("list_price")
+    price_kind = house_summary.get("price_kind") or "sale"
     sqft = house_summary.get("sqft")
     beds = house_summary.get("beds")
     baths = house_summary.get("baths")
 
     facts = [f"Address: {address}"]
     if list_price is not None:
-        facts.append(f"List price: ${list_price:,.0f}")
+        if price_kind == "rent":
+            facts.append(f"Monthly rent: ${list_price:,.0f}/mo")
+        else:
+            facts.append(f"Sale price: ${list_price:,.0f}")
     if sqft:
         facts.append(f"Sqft: {sqft}")
     if beds is not None:
