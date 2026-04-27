@@ -11,6 +11,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
+import resend
+import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 
@@ -92,38 +94,122 @@ def create_invite(
     )
     invite = invite_res.data[0]
 
-    # Route through /auth/callback so Supabase's PKCE code exchange happens
-    # first (sets the session cookie), then /auth/callback redirects to the
-    # `next` param which actually accepts the invite. Going directly to
-    # /invite/{token} skips the code exchange — the page renders with no
-    # auth cookie and accept fails silently.
+    # Route through /auth/callback for PKCE code exchange, then to
+    # /invite/{token} which auto-accepts. Even if Supabase strips the
+    # ?next=, the per-request invite auto-claim sweep in db/users.py
+    # picks them up on the next authed call.
     next_path = f"/invite/{token}"
     redirect_to = (
         f"{settings.frontend_url.rstrip('/')}/auth/callback"
         f"?next={quote(next_path, safe='/')}"
     )
+
+    # Generate the one-tap login URL via Supabase admin (no email sent).
+    # Try invite first (creates user); fall back to magiclink if user exists.
+    action_link: str | None = None
     try:
-        sb.auth.admin.invite_user_by_email(
-            body.email, {"redirect_to": redirect_to}
+        link = sb.auth.admin.generate_link(
+            {
+                "type": "invite",
+                "email": body.email,
+                "options": {"redirect_to": redirect_to},
+            }
         )
+        action_link = link.properties.action_link
     except Exception as e:
-        msg = str(e).lower()
-        if "already" in msg or "registered" in msg or "exists" in msg:
-            # User exists — send a magic link instead so they get a click-through.
-            try:
-                sb.auth.sign_in_with_otp(
-                    {"email": body.email, "options": {"email_redirect_to": redirect_to}}
-                )
-            except Exception:
-                log.exception("OTP send failed for %s", body.email)
-        else:
-            log.exception("invite send failed for %s on tour %s", body.email, tour_id)
+        log.info("generate_link 'invite' failed (likely existing user): %s", e)
+
+    if not action_link:
+        try:
+            link = sb.auth.admin.generate_link(
+                {
+                    "type": "magiclink",
+                    "email": body.email,
+                    "options": {"redirect_to": redirect_to},
+                }
+            )
+            action_link = link.properties.action_link
+        except Exception as e:
+            log.exception("magiclink generation failed for %s", body.email)
             raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY, f"Could not send invite: {e}"
+                status.HTTP_502_BAD_GATEWAY,
+                f"Could not generate invite link: {e}",
             ) from e
+
+    _send_invite_email(
+        to=body.email,
+        owner_name=_owner_label(user.id),
+        tour_name=tour["name"],
+        action_link=action_link,
+    )
 
     log.info("invite created for %s tour=%s role=%s", body.email, tour_id, body.role)
     return InviteOut(**invite)
+
+
+def _owner_label(owner_user_id: str) -> str:
+    sb = supabase()
+    res = (
+        sb.table("users")
+        .select("name, email")
+        .eq("id", owner_user_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return "Someone"
+    row = res.data[0]
+    return row.get("name") or row.get("email") or "Someone"
+
+
+def _send_invite_email(
+    *, to: str, owner_name: str, tour_name: str, action_link: str
+) -> None:
+    if not settings.resend_api_key:
+        log.warning("RESEND_API_KEY not set — invite email skipped")
+        return
+    subject = f"{owner_name} invited you to a HomeAnalyzer tour"
+    text = (
+        f"{owner_name} invited you to the tour \"{tour_name}\" on HomeAnalyzer.\n\n"
+        f"Open the tour in one tap:\n{action_link}\n\n"
+        "This link logs you in automatically — no password needed."
+    )
+    html = f"""
+<!doctype html>
+<html>
+<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;line-height:1.55;max-width:520px;margin:0 auto;padding:24px;">
+  <h2 style="margin:0 0 8px;font-size:20px;">{owner_name} invited you to a tour</h2>
+  <p style="margin:0 0 24px;color:#52525b;">
+    <strong>{tour_name}</strong> on HomeAnalyzer
+  </p>
+  <p style="margin:0 0 24px;">
+    <a href="{action_link}"
+       style="display:inline-block;padding:12px 24px;background:#5b50e8;color:#fff;text-decoration:none;border-radius:10px;font-weight:600;">
+      Open the tour
+    </a>
+  </p>
+  <p style="margin:0;color:#71717a;font-size:13px;">
+    Tapping the button logs you in automatically — no password needed.
+  </p>
+</body>
+</html>
+""".strip()
+
+    resend.api_key = settings.resend_api_key
+    try:
+        resend.Emails.send(
+            {
+                "from": settings.resend_from_email,
+                "to": [to],
+                "subject": subject,
+                "html": html,
+                "text": text,
+            }
+        )
+        log.info("invite email sent to %s", to)
+    except Exception as e:
+        log.exception("invite email send failed for %s", to)
+        sentry_sdk.capture_exception(e)
 
 
 @router.get("/tours/{tour_id}/invites", response_model=list[InviteOut])
