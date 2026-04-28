@@ -196,15 +196,19 @@ export function mergeFloorPlans(
   for (const sr of schematic.rooms) {
     const match = measuredMatchToSchematic.get(sr.id);
     if (match) {
+      // Floor: schematic label wins when it explicitly names a floor
+      // ("upstairs", "second-floor", etc.) since the agent's spoken
+      // labels are higher-signal than geometric guesses. Fall back to
+      // measured's floor when the label is ambiguous.
+      const labelFloor = inferFloorFromLabel(sr.label);
+      const measuredFloor = match.floor ?? 1;
       rooms.push({
         ...sr,
         // Real dimensions from measurement override LLM estimate.
         width_ft: Math.max(1, Math.round(match.width_m * M_TO_FT)),
         depth_ft: Math.max(1, Math.round(match.depth_m * M_TO_FT)),
         source: "verified",
-        // Prefer measured's floor (geometric truth); fall back to
-        // parsing the schematic label for upstairs/first-floor hints.
-        floor: match.floor ?? inferFloorFromLabel(sr.label),
+        floor: labelFloor > 1 ? labelFloor : measuredFloor,
       });
     } else {
       rooms.push({
