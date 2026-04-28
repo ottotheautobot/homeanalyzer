@@ -23,6 +23,7 @@ from app.routes import (
     share,
     streams,
     tours,
+    video,
     webhooks,
 )
 
@@ -49,6 +50,7 @@ app.include_router(tours.router)
 app.include_router(houses.router)
 app.include_router(invites.router)
 app.include_router(audio.router)
+app.include_router(video.router)
 app.include_router(realtime.router)
 app.include_router(webhooks.router)
 app.include_router(streams.router)

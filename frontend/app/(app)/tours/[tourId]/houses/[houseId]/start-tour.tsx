@@ -14,6 +14,7 @@ import type { House } from "@/lib/types";
 
 import { RecordAudio } from "./record-audio";
 import { UploadAudio } from "./upload-audio";
+import { UploadVideo } from "./upload-video";
 
 type Mode = "picker" | "solo" | "multi";
 
@@ -142,6 +143,9 @@ export function StartTour({
             <RecordAudio houseId={houseId} />
             <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
               <UploadAudio houseId={houseId} />
+            </div>
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3">
+              <UploadVideo houseId={houseId} />
             </div>
             <div className="flex justify-end">
               <Button variant="ghost" onClick={() => setMode("picker")}>
