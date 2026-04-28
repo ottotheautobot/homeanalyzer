@@ -10,6 +10,9 @@ Version names are marketing-style for now (`v1.6`, `v2.0`, etc.) and reflect the
 
 Customer-discovery phase — see `CONTEXT.md`. No major feature work planned for ~4 weeks. Smaller items still ship as observation surfaces friction worth fixing.
 
+### Added
+- `POST /houses/{id}/video` + `Upload video` button in the Solo-mode start-tour modal. Recovers tours where the live multi-party path didn't capture (no signal, app failure, etc.) by running the full post-meeting pipeline against an uploaded camera-roll video: vision over frames → Whisper transcription of extracted audio → observations → synthesis → schematic floor plan → measured floor plan (Modal, gated). Doubles as the empirical input for the open "does clear video materially improve analysis output" question on the post-Zoom architecture decision.
+
 ---
 
 ## v2.6 — Customer-discovery shift — 2026-04-28
