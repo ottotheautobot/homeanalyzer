@@ -36,7 +36,7 @@ _Date: ____ (fill in)_
 - **Decision:** Run an inspector-customer discovery track in parallel with the buyer's-agent track during the discovery phase.
 - **Context:** While exploring who the v1 product naturally serves, the home-inspector use case surfaced as a structurally similar workflow: walk a property, capture audio + visuals, produce a structured report. The same pipeline applies.
 - **Rationale:** The existing capture → transcription → classification → structured-output pipeline translates well. What changes is prompt taxonomy (defects per ASHI/InterNACHI standards), output shape (PDF inspection report vs. buyer brief), and accuracy bar (safety-related observations need human-in-the-loop). These are reshapings, not rebuilds. Cheap to test in discovery; high upside if a single inspector validates.
-- **Status:** `Active`. See `V2_BACKLOG.md` Inspector vertical section for the candidate work.
+- **Status:** `Active`. See `BACKLOG.md` Inspector vertical section for the candidate work.
 
 ## 4. Buyer's agent path elevated to primary discovery target
 
@@ -45,7 +45,7 @@ _Date: ____ (fill in)_
 - **Decision:** Make buyer's agents the primary discovery target ahead of direct-to-consumer buyers.
 - **Context:** During strategic-framing discussions, the warm-distribution question dominated: who can we get in front of without paid acquisition or cold outreach? The builder's mother is a working real-estate professional with a broker network, which makes the buyer's-agent path uniquely accessible.
 - **Rationale:** Cold customer-discovery is the rate-limiting step at this stage. Warm intros via an existing broker network are 10x more efficient than D2C funnel-building. Even if the long-term customer is the buyer, agent-mediated distribution is a faster path to validated demand.
-- **Status:** `Active`. See `V2_BACKLOG.md` Buyer's agent vertical section.
+- **Status:** `Active`. See `BACKLOG.md` Buyer's agent vertical section.
 
 ## 5. D2C path deprioritized
 
@@ -63,4 +63,4 @@ _Date: ____ (fill in)_
 - **Decision:** Open a research track investigating whether capture (high-fidelity recording for analysis) should be architecturally split from collaboration (live partner experience) instead of using one transport for both.
 - **Context:** Two pain points from v1 surfaced together: (a) Zoom's video compression visibly hurts capture quality, especially for the floor-plan reconstruction pipeline that wants every pixel — and (b) Zoom's active-speaker bandwidth allocation has degraded the partner's live-viewing experience in multi-party tours. Both are symptoms of conflating two jobs into one transport.
 - **Rationale:** A capture-vs-collaboration split would let each be optimized independently. **Capture** = local 4K (and possibly LiDAR depth) recorded on-device, decoupled from any live link, fed to the analysis pipeline at full quality. **Collaboration** = a low-bandwidth audio stream + the live observation feed as the partner's UX, replacing video mirroring entirely. The collaboration UX may end up *richer* than passive video-watching because it gives the partner an interactive feed of what's being captured, not just a shaky mirror. Eliminates Meeting BaaS as a transport dependency. Heavy overlap with the existing "replace the Zoom-bot middleman" backlog item — this is the cleaner architectural framing.
-- **Status:** `Under Review`. Not committed. Pending customer validation of whether the buyer/inspector use case rewards capture quality enough to justify the iOS-app cost it would imply (see `V2_BACKLOG.md` Research / exploration).
+- **Status:** `Under Review`. Not committed. Pending customer validation of whether the buyer/inspector use case rewards capture quality enough to justify the iOS-app cost it would imply (see `BACKLOG.md` Research / exploration).

@@ -1,6 +1,15 @@
 # House Tour Notes
 
-Real-time, multi-party house-hunting notes app. See `PROJECT_BRIEF.md` for spec.
+Real-time, multi-party house-hunting notes app.
+
+## Docs
+
+- `CONTEXT.md` — current project posture (start here)
+- `BACKLOG.md` — what's not yet shipped, by priority
+- `CHANGELOG.md` — what's already shipped, by version
+- `DECISIONS_LOG.md` — strategic decisions and the reasoning
+- `PROJECT_BRIEF.md` — original v1 launch plan (historical record)
+- `OPERATIONS.md` — credentials and config touchpoints across systems
 
 ## Layout
 

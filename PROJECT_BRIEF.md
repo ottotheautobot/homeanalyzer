@@ -268,4 +268,4 @@ Wire the abstraction once, never sprinkle vendor-specific logic outside `provide
 
 ## Stretch goals
 
-See `V2_BACKLOG.md`.
+See `BACKLOG.md`.

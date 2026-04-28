@@ -15,8 +15,8 @@ This is the authoritative current-state document. When `PROJECT_BRIEF.md` and th
 
 ## Customer paths under consideration
 
-- **Buyers' agents (primary discovery target)** — warm distribution available via mom; broker network is the vector. White-label briefs, multi-client dashboards, agent-to-buyer share flow are the relevant feature surface (see V2_BACKLOG `Buyer's agent vertical`).
-- **Inspectors (parallel discovery track)** — existing audio capture → transcription → classification → structured output pipeline translates well to inspection workflows. Would need a different prompt taxonomy + PDF report shape, not an architectural rebuild (see V2_BACKLOG `Inspector vertical`).
+- **Buyers' agents (primary discovery target)** — warm distribution available via mom; broker network is the vector. White-label briefs, multi-client dashboards, agent-to-buyer share flow are the relevant feature surface (see BACKLOG `Buyer's agent vertical`).
+- **Inspectors (parallel discovery track)** — existing audio capture → transcription → classification → structured output pipeline translates well to inspection workflows. Would need a different prompt taxonomy + PDF report shape, not an architectural rebuild (see BACKLOG `Inspector vertical`).
 - **Relocation services (Phase 3)** — only if the first two paths don't pan out.
 - **D2C is not the path.** Brutal economics, no retention, low willingness to pay. Rule it out unless something forces a re-evaluation.
 
@@ -24,7 +24,7 @@ This is the authoritative current-state document. When `PROJECT_BRIEF.md` and th
 
 These are *open questions* for the discovery phase, not decisions:
 
-- **Capture-vs-collaboration split.** Should high-fidelity capture (local 4K, possibly LiDAR) be decoupled from the live audio + observation feed that drives collaboration? Tracked in `V2_BACKLOG.md` Research / exploration.
+- **Capture-vs-collaboration split.** Should high-fidelity capture (local 4K, possibly LiDAR) be decoupled from the live audio + observation feed that drives collaboration? Tracked in `BACKLOG.md` Research / exploration.
 - **Departure from Zoom + Meeting BaaS.** Plausible if the capture/collab split is adopted; not committed.
 - **Native iOS app.** Becomes a hard requirement *only* if the local-4K-capture path is committed. Otherwise stays a productization preference, not a blocker.
 

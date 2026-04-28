@@ -1,6 +1,6 @@
 # Option C: True Measured 2D Floor Plan from Casual Handheld Tour Video
 
-Detailed research notes from April 2026. Companion to the "Measured 2D floor plans from tour video" item in `V2_BACKLOG.md`.
+Detailed research notes from April 2026. Companion to the "Measured 2D floor plans from tour video" item in `BACKLOG.md`.
 
 ## TL;DR
 
