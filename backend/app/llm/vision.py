@@ -272,13 +272,13 @@ def _vision_call(
                 {
                     "type": "text",
                     "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 }
             ],
             tools=[
                 {
                     **OBSERVATIONS_TOOL,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 }
             ],
             tool_choice={"type": "tool", "name": "record_observations"},

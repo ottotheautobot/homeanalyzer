@@ -161,10 +161,13 @@ def extract_observations(
             {
                 "type": "text",
                 "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
+                # 1h TTL (vs default 5m): live tours run 30+ min with
+                # ~20s extraction cadence; the 5m window misses on
+                # slower-paced tours and we re-pay the full prefix.
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         ],
-        tools=[{**TOOL_SCHEMA, "cache_control": {"type": "ephemeral"}}],
+        tools=[{**TOOL_SCHEMA, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         tool_choice={"type": "tool", "name": "record_observations"},
         messages=[{"role": "user", "content": user_message}],
     )

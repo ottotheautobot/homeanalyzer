@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     zoom_sdk_id: str = ""
     zoom_sdk_secret: str = ""
 
+    # Zoom Server-to-Server OAuth (separate Marketplace app from the Meeting
+    # SDK above). Required to programmatically end the host's meeting after
+    # End Tour, so the Zoom call closes for all participants instead of
+    # staying open until the host manually leaves.
+    # Required scope on the S2S app: meeting:write:meeting:admin (or the
+    # legacy meeting:write:admin). Empty = feature disabled, end_tour stops
+    # the bot but leaves the Zoom meeting open.
+    zoom_s2s_account_id: str = ""
+    zoom_s2s_client_id: str = ""
+    zoom_s2s_client_secret: str = ""
+
     deepgram_api_key: str = ""
     # Set true once MB confirms streaming.input works for our account. Until
     # then it costs tokens for nothing — MB establishes the WS but never

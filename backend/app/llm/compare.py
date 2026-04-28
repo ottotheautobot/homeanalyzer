@@ -74,7 +74,7 @@ def compare_houses(houses: list[dict], observations_by_house: dict[str, list[dic
             {
                 "type": "text",
                 "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         ],
         messages=[{"role": "user", "content": user_message}],

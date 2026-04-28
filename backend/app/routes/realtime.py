@@ -20,6 +20,7 @@ from app.providers.meetingbaas import get_meeting_provider
 from app.realtime import state, tokens
 from app.realtime.extractor import maybe_extract
 from app.routes.houses import get_house_for_user, HouseOut
+from app.services import zoom as zoom_service
 
 log = logging.getLogger(__name__)
 
@@ -163,7 +164,25 @@ async def end_tour(
             status.HTTP_502_BAD_GATEWAY, f"Meeting BaaS rejected stop_bot: {e}"
         ) from e
 
+    # Best-effort: also end the Zoom meeting itself so it closes for all
+    # participants instead of staying open until the host manually leaves.
+    # No-op when Zoom S2S creds aren't configured. Failure here doesn't
+    # block end_tour — the bot is already stopped, which is the contract.
     sb = supabase()
+    tour_row = (
+        sb.table("tours")
+        .select("zoom_pmr_url")
+        .eq("id", house["tour_id"])
+        .limit(1)
+        .execute()
+    )
+    zoom_url = (tour_row.data[0] if tour_row.data else {}).get("zoom_pmr_url")
+    if zoom_url and zoom_service.is_configured():
+        try:
+            await zoom_service.end_meeting(zoom_url)
+        except Exception:
+            log.exception("zoom end_meeting raised unexpectedly for house %s", house_id)
+
     res = (
         sb.table("houses")
         .update({"status": "synthesizing"})
