@@ -1,6 +1,8 @@
 # Project Brief — House Tour Notes (v2)
 
-> **All architectural decisions are locked. Claude Code should not propose alternatives to anything in the "Locked decisions" section without explicit user instruction. Build to spec.**
+> **Status note (post-v1):** This brief was the v1 launch plan, and it shipped — the product was validated on real Florida tours. We are now in customer-discovery mode; see `CONTEXT.md` for current posture and `DECISIONS_LOG.md` for what's evolved since v1. Architectural decisions captured below should not be treated as gospel; several are now under review. Specifically, the Zoom + Meeting BaaS architecture may be replaced by a local-capture + audio-streaming model. **Do not propose rebuilds without explicit user direction.**
+
+> **Original v1 framing (preserved as historical record):** All architectural decisions are locked. Claude Code should not propose alternatives to anything in the "Locked decisions" section without explicit user instruction. Build to spec.
 
 ## Vision
 
