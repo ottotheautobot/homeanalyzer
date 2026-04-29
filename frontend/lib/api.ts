@@ -17,12 +17,23 @@ export async function callBackend<T = unknown>(
   if (!token) {
     throw new BackendError(401, "Not authenticated");
   }
+  // Default Content-Type to application/json when sending a string
+  // body. Without this, fetch sends text/plain and FastAPI's body
+  // parser handles flat dicts fine but breaks on nested arrays-of-
+  // objects with "Input should be a valid dictionary or object to
+  // extract fields from". Caller can still override by passing an
+  // explicit Content-Type in init.headers.
+  const headers: Record<string, string> = {
+    ...((init?.headers as Record<string, string>) ?? {}),
+    Authorization: `Bearer ${token}`,
+  };
+  if (typeof init?.body === "string" && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
   const res = await fetch(`${BACKEND_URL}${path}`, {
     ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     cache: "no-store",
   });
 

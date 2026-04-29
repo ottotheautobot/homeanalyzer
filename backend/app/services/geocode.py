@@ -163,18 +163,29 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
             lng, lat = coords[0], coords[1]
             housenumber = props.get("housenumber")
             street = props.get("street")
-            name = props.get("name")
+            name = props.get("name") or ""
             # Photon often stuffs the house number into `name` (e.g.
             # "Peters Road/# 8200 - (Plantation Colony)") when OSM
-            # tagging didn't break it out into `housenumber`. Detect
-            # that and prefer `name` so we don't lose the digits.
+            # tagging didn't break it out into `housenumber`. Pull
+            # the digits and reformat as "8200 Peters Road" so the
+            # dropdown shows something readable.
+            if not housenumber and name and street:
+                m = re.search(r"#\s*(\d{1,6})\b", name) or re.search(
+                    r"\b(\d{1,6})\b", name
+                )
+                if m:
+                    housenumber = m.group(1)
             constructed = " ".join(p for p in [housenumber, street] if p)
-            if not housenumber and name and any(ch.isdigit() for ch in name):
-                head = name
-            elif constructed:
+            if constructed:
                 head = constructed
+            elif name:
+                # Last resort: clean up the OSM name by stripping the
+                # "/# 1234" notation and trailing parenthetical noise.
+                cleaned = re.sub(r"\s*/\s*#?\s*\d+\s*", " ", name)
+                cleaned = re.sub(r"\s*[-—]\s*\([^)]*\)\s*$", "", cleaned)
+                head = cleaned.strip()
             else:
-                head = name or ""
+                head = ""
             tail_parts = [
                 props.get("city") or props.get("district"),
                 props.get("state"),
