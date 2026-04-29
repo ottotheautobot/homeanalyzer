@@ -47,6 +47,13 @@ export function AddressAutocomplete({
    *  Lets us distinguish "not queried yet" from "queried, found nothing"
    *  so we can show a helpful hint in the empty case. */
   const [hasQueried, setHasQueried] = useState(false);
+  /** "down" by default; flips to "up" when there isn't enough room
+   *  below the input for the dropdown (e.g. on a phone where the
+   *  field is near the bottom of the visible viewport). */
+  const [direction, setDirection] = useState<"up" | "down">("down");
+  /** Max height of the dropdown panel, computed from available space
+   *  in the chosen direction so it never overflows the viewport. */
+  const [maxHeight, setMaxHeight] = useState<number>(288);
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -70,6 +77,40 @@ export function AddressAutocomplete({
       document.removeEventListener("touchstart", onDocPointer);
     };
   }, []);
+
+  // Pick "open above" vs "open below" based on available viewport
+  // room. Recomputed when the dropdown opens, when its content height
+  // changes (suggestions arrive), and on resize. Without this, on a
+  // phone with the field near the bottom of the screen, the dropdown
+  // is cropped or hidden behind the keyboard.
+  useEffect(() => {
+    if (!open) return;
+    function reposition() {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const vh =
+        typeof window !== "undefined" ? window.innerHeight : 800;
+      const PAD = 12;
+      const spaceBelow = vh - rect.bottom - PAD;
+      const spaceAbove = rect.top - PAD;
+      // Prefer below when there's >=200px (covers ~5 items). Flip up
+      // when below is cramped AND above has more room.
+      if (spaceBelow >= 200 || spaceBelow >= spaceAbove) {
+        setDirection("down");
+        setMaxHeight(Math.max(120, Math.min(320, spaceBelow)));
+      } else {
+        setDirection("up");
+        setMaxHeight(Math.max(120, Math.min(320, spaceAbove)));
+      }
+    }
+    reposition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [open, suggestions.length, hasQueried]);
 
   // Debounced fetch on value change.
   useEffect(() => {
@@ -173,21 +214,26 @@ export function AddressAutocomplete({
         <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 size-4 animate-spin text-zinc-400" />
       ) : null}
       {open && suggestions.length > 0 ? (
-        <ul className="absolute z-20 mt-1 left-0 right-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg overflow-hidden max-h-72 overflow-y-auto">
+        <ul
+          className={`absolute z-20 left-0 right-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg overflow-y-auto overscroll-contain ${
+            direction === "down" ? "top-full mt-1" : "bottom-full mb-1"
+          }`}
+          style={{ maxHeight }}
+        >
           {suggestions.map((s, i) => {
             const isActive = i === active;
             return (
               <li key={`${s.address}-${i}`}>
                 <button
                   type="button"
-                  // Use onMouseDown not onClick so the input's blur
-                  // doesn't fire first and close the dropdown before
-                  // the click registers.
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    pick(i);
-                  }}
-                  onTouchEnd={(e) => {
+                  // onMouseDown(preventDefault) keeps the input from
+                  // blurring (which would close the dropdown). The
+                  // actual selection fires on click — iOS Safari only
+                  // synthesizes click after a tap that ENDS at roughly
+                  // the same spot it started, so a scroll gesture
+                  // inside the list won't accidentally pick.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
                     e.preventDefault();
                     pick(i);
                   }}
@@ -205,7 +251,11 @@ export function AddressAutocomplete({
           })}
         </ul>
       ) : open && hasQueried && !loading && suggestions.length === 0 ? (
-        <div className="absolute z-20 mt-1 left-0 right-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg px-3 py-2 text-xs text-zinc-500 leading-snug">
+        <div
+          className={`absolute z-20 left-0 right-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg px-3 py-2 text-xs text-zinc-500 leading-snug ${
+            direction === "down" ? "top-full mt-1" : "bottom-full mb-1"
+          }`}
+        >
           No matches in our address index. Type the full address and tap{" "}
           <span className="font-medium">save / add</span> anyway — we&apos;ll
           try to look it up another way.
