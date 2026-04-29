@@ -121,11 +121,35 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* Kill the iOS Safari gray flash on taps. Components opt back in
+       to a tactile press feel via active:scale + transition utilities. */
+    -webkit-tap-highlight-color: transparent;
   }
   body {
     @apply bg-background text-foreground;
+    /* Block iOS bounce overscroll on the body — feels like a webpage
+       otherwise. Inner scroll containers can still scroll normally. */
+    overscroll-behavior-y: none;
   }
   html {
     @apply font-sans;
+    /* Honor iOS safe areas (notch, home indicator) at the html level
+       so any sticky element using env(safe-area-inset-*) lines up. */
+    -webkit-text-size-adjust: 100%;
+  }
+  /* Long-press shouldn't select text on tap targets — matches native. */
+  button,
+  [role="button"],
+  a {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Inputs / textareas DO want text selection. */
+  input,
+  textarea,
+  [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
   }
 }

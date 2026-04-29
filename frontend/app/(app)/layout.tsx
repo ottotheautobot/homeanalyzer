@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { signOut } from "@/app/actions/auth";
 import { Providers } from "@/app/providers";
+import { MobileNav } from "@/components/mobile-nav";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export default async function AppLayout({
@@ -20,11 +21,14 @@ export default async function AppLayout({
   return (
     <Providers>
       <div className="flex min-h-screen flex-col">
-        <header className="sticky top-0 z-30 border-b border-zinc-200 dark:border-zinc-800 bg-white/85 dark:bg-zinc-950/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:supports-[backdrop-filter]:bg-zinc-950/70">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-2.5">
+        <header
+          className="sticky top-0 z-30 border-b border-zinc-200 dark:border-zinc-800 bg-white/85 dark:bg-zinc-950/85 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:supports-[backdrop-filter]:bg-zinc-950/70"
+          style={{ paddingTop: "env(safe-area-inset-top)" }}
+        >
+          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-2.5 min-h-[52px]">
             <Link
               href="/tours"
-              className="flex items-center gap-2 group"
+              className="flex items-center gap-2 group active:scale-95 transition-transform"
               aria-label="HomeAnalyzer home"
             >
               <span className="inline-flex items-center justify-center size-8 rounded-lg bg-primary text-primary-foreground">
@@ -38,28 +42,28 @@ export default async function AppLayout({
                 <span className="text-primary">Analyzer</span>
               </span>
             </Link>
-            <nav className="flex items-center gap-1">
+            {/* Desktop nav. Mobile uses the bottom tab bar. */}
+            <nav className="hidden sm:flex items-center gap-1">
               <Link
                 href="/map"
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
               >
                 <MapIcon className="size-4" />
-                <span className="hidden sm:inline">Map</span>
+                Map
               </Link>
               <Link
                 href="/compare"
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
               >
                 <GitCompare className="size-4" />
-                <span className="hidden sm:inline">Compare</span>
+                Compare
               </Link>
               <Link
                 href="/settings"
                 className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-900 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors"
-                aria-label="Settings"
               >
                 <Settings className="size-4" />
-                <span className="hidden sm:inline">Settings</span>
+                Settings
               </Link>
               <form action={signOut}>
                 <button
@@ -68,15 +72,27 @@ export default async function AppLayout({
                   aria-label="Sign out"
                 >
                   <LogOut className="size-4" />
-                  <span className="hidden sm:inline">Sign out</span>
+                  Sign out
                 </button>
               </form>
             </nav>
+            {/* Mobile: keep just sign-out in the header — the four
+                primary nav items live in the bottom tab bar. */}
+            <form action={signOut} className="sm:hidden">
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center size-10 rounded-md text-zinc-600 dark:text-zinc-400 active:bg-zinc-100 dark:active:bg-zinc-900 active:scale-95 transition-all"
+                aria-label="Sign out"
+              >
+                <LogOut className="size-5" />
+              </button>
+            </form>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-5">
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-5 pb-24 sm:pb-5">
           {children}
         </main>
+        <MobileNav />
       </div>
     </Providers>
   );

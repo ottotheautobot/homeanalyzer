@@ -2,11 +2,11 @@ import Link from "next/link";
 
 import { LiveRefresh } from "@/components/live-refresh";
 import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
 import { FloorPlanView } from "./floor-plan";
+import { HouseTabs, type TabSpec } from "./house-tabs";
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
@@ -72,19 +72,138 @@ export default async function HousePage({
     .join(" · ");
 
   const isLiveMultiParty = house.status === "touring" && !!house.bot_id;
+  const hasRecording =
+    house.status === "completed" &&
+    ((house.video_url && (house.video_duration_seconds ?? 0) >= 30) ||
+      (!house.video_url && house.audio_url));
+  const hasRooms =
+    house.status === "completed" && (house.floor_plan_json?.rooms?.length ?? 0) > 0;
+
+  // Tour control + recovery surface — always present on the page above
+  // the tabs since it's the action affordance, not content.
+  const tourControl = (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4">
+        {isLiveMultiParty ? (
+          <LiveTour
+            house={house}
+            zoomUrl={tour.zoom_pmr_url}
+            startedAt={house.tour_started_at}
+          />
+        ) : house.status === "upcoming" ? (
+          <StartTour
+            houseId={house.id}
+            defaultZoomUrl={tour.zoom_pmr_url}
+          />
+        ) : (
+          <p className="text-sm text-zinc-500">
+            {house.status === "synthesizing"
+              ? "Tour complete. Transcribing audio, extracting observations, and writing the brief — this can take a few minutes for longer tours."
+              : "Tour complete."}
+          </p>
+        )}
+      </div>
+      {/* Recovery affordance: bot ran but post-meeting pipeline didn't
+          land — no audio, no synthesis. Stuck rows sit at
+          status=synthesizing (the original webhook crashed before
+          flipping to completed) but we also catch
+          completed-without-data. */}
+      {house.bot_id &&
+      (house.status === "synthesizing" ||
+        (house.status === "completed" && !house.audio_url)) &&
+      !house.synthesis_md ? (
+        <RetryFinalize houseId={house.id} />
+      ) : null}
+    </div>
+  );
+
+  // Build tab list dynamically — only show tabs that have content.
+  const tabs: TabSpec[] = [];
+  const panels: Record<string, React.ReactNode> = {};
+
+  // Brief tab — synthesis if available, else the status message.
+  tabs.push({ id: "brief", label: "Brief" });
+  panels.brief = house.synthesis_md ? (
+    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4">
+      <Synthesis markdown={house.synthesis_md} />
+    </div>
+  ) : (
+    <p className="text-sm text-zinc-500 px-1">
+      {house.status === "upcoming"
+        ? "Start the tour and the brief will appear here once the recording is processed."
+        : "Brief is being generated — check back in a couple minutes."}
+    </p>
+  );
+
+  // Rooms tab — only when we have a floor plan with rooms.
+  if (hasRooms) {
+    tabs.push({
+      id: "rooms",
+      label: "Rooms",
+      badge: house.floor_plan_json?.rooms?.length,
+    });
+    panels.rooms = <FloorPlanView plan={house.floor_plan_json} />;
+  }
+
+  // Notes (observations) tab — always present; this is also where
+  // photo notes live.
+  tabs.push({
+    id: "notes",
+    label: "Notes",
+    badge: observations.length || undefined,
+  });
+  panels.notes = (
+    <div className="space-y-3">
+      <PhotoNoteButton houseId={house.id} />
+      <ObservationFeed houseId={house.id} initial={observations} />
+    </div>
+  );
+
+  // Recording tab — when archived audio/video exists.
+  if (hasRecording) {
+    tabs.push({ id: "recording", label: "Recording" });
+    panels.recording = <RecordingPlayer houseId={house.id} />;
+  }
+
+  // Live transcript — only when a multi-party tour is in progress.
+  if (isLiveMultiParty) {
+    tabs.push({
+      id: "live",
+      label: "Live",
+      badge: transcripts.length || undefined,
+    });
+    panels.live = (
+      <div className="space-y-2">
+        <p className="text-xs text-zinc-500 px-1">
+          Lines arrive as the bot hears them. Notes populate every ~20s.
+        </p>
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 max-h-72 overflow-y-auto">
+          <TranscriptFeed houseId={house.id} initial={transcripts} />
+        </div>
+      </div>
+    );
+  }
+
+  // Default tab: live > brief > notes, in that priority.
+  const defaultId = isLiveMultiParty
+    ? "live"
+    : house.synthesis_md
+      ? "brief"
+      : "notes";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <LiveRefresh
         channel={`house:${house.id}`}
         table="houses"
         filter={`id=eq.${house.id}`}
       />
       <RefreshOnVisibility />
+
       <div>
         <Link
           href={`/tours/${tourId}`}
-          className="text-sm text-zinc-600 dark:text-zinc-400 hover:underline"
+          className="text-sm text-zinc-600 dark:text-zinc-400 hover:underline inline-flex items-center min-h-[36px]"
         >
           ← Tour
         </Link>
@@ -139,97 +258,11 @@ export default async function HousePage({
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {isLiveMultiParty ? "Live tour" : "Tour"}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLiveMultiParty ? (
-            <LiveTour
-              house={house}
-              zoomUrl={tour.zoom_pmr_url}
-              startedAt={house.tour_started_at}
-            />
-          ) : house.status === "upcoming" ? (
-            <StartTour
-              houseId={house.id}
-              defaultZoomUrl={tour.zoom_pmr_url}
-            />
-          ) : (
-            <p className="text-sm text-zinc-500">
-              {house.status === "synthesizing"
-                ? "Tour complete. Transcribing audio, extracting observations, and writing the brief — this can take a few minutes for longer tours."
-                : "Tour complete."}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      {tourControl}
 
-      {/* Recovery affordance: bot ran but post-meeting pipeline didn't
-          land — no audio, no synthesis. Stuck rows usually sit at
-          status=synthesizing (the original webhook crashed before flipping
-          to completed) but we also catch completed-without-data. Surfaces
-          retry-finalize, which only works while MB still has the recording. */}
-      {house.bot_id &&
-      (house.status === "synthesizing" ||
-        (house.status === "completed" && !house.audio_url)) &&
-      !house.synthesis_md ? (
-        <RetryFinalize houseId={house.id} />
-      ) : null}
-
-      {house.synthesis_md ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Synthesis</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Synthesis markdown={house.synthesis_md} />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {house.status === "completed" ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Rooms</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <FloorPlanView plan={house.floor_plan_json} />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {house.status === "completed" &&
-      ((house.video_url && (house.video_duration_seconds ?? 0) >= 30) ||
-        (!house.video_url && house.audio_url)) ? (
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">
-            Recording
-          </h2>
-          <RecordingPlayer houseId={house.id} />
-        </section>
-      ) : null}
-
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">Observations</h2>
-        <PhotoNoteButton houseId={house.id} />
-        <ObservationFeed houseId={house.id} initial={observations} />
-      </section>
-
-      {isLiveMultiParty ? (
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 px-1">Live transcript</h2>
-          <p className="text-xs text-zinc-500">
-            Lines arrive as the bot hears them. Observations above populate
-            every ~20s.
-          </p>
-          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 max-h-72 overflow-y-auto">
-            <TranscriptFeed houseId={house.id} initial={transcripts} />
-          </div>
-        </section>
-      ) : null}
+      <HouseTabs tabs={tabs} defaultId={defaultId}>
+        {panels}
+      </HouseTabs>
     </div>
   );
 }

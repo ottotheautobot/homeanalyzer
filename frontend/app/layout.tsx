@@ -28,6 +28,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  // viewportFit:"cover" lets env(safe-area-inset-*) actually have
+  // values to work with — without it, iOS pads the viewport and the
+  // bottom tab bar can't tuck into the home-indicator area.
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#fafafa" },
     { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
