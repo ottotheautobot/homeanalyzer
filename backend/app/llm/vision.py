@@ -49,13 +49,9 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
-def probe_video_duration(mp4_bytes: bytes) -> float | None:
-    """Return the duration (seconds) of the video stream in an mp4. None on
-    failure. Used to gate UI playback — bots recording with camera off in
-    Zoom produce ~1s of video alongside long audio."""
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-        f.write(mp4_bytes)
-        path = f.name
+def probe_video_duration_at_path(path: str) -> float | None:
+    """Path-based variant — used by the video-upload pipeline that streams
+    a multi-hundred-MB video to disk rather than holding it in memory."""
     try:
         r = subprocess.run(
             [
@@ -80,6 +76,17 @@ def probe_video_duration(mp4_bytes: bytes) -> float | None:
         return float(out) if out else None
     except Exception:
         return None
+
+
+def probe_video_duration(mp4_bytes: bytes) -> float | None:
+    """Return the duration (seconds) of the video stream in an mp4. None on
+    failure. Used to gate UI playback — bots recording with camera off in
+    Zoom produce ~1s of video alongside long audio."""
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(mp4_bytes)
+        path = f.name
+    try:
+        return probe_video_duration_at_path(path)
     finally:
         try:
             os.unlink(path)
@@ -87,15 +94,13 @@ def probe_video_duration(mp4_bytes: bytes) -> float | None:
             pass
 
 
-def _ffmpeg_extract_frames(
-    mp4_bytes: bytes,
+def _ffmpeg_extract_frames_at_path(
+    in_path: str,
 ) -> list[tuple[float, bytes]]:
-    """Run ffmpeg to extract scene-change frames. Returns (seconds, jpeg_bytes)."""
+    """Path-based variant — skips writing bytes to a temp file when the
+    caller already streamed the video to disk (video-upload pipeline)."""
     with tempfile.TemporaryDirectory() as td:
-        in_path = os.path.join(td, "in.mp4")
         out_pattern = os.path.join(td, "f-%05d.jpg")
-        with open(in_path, "wb") as f:
-            f.write(mp4_bytes)
 
         # Filter chain:
         #   1. select frames at FRAME_INTERVAL_SECONDS rate
@@ -165,6 +170,22 @@ def _ffmpeg_extract_frames(
             len(timestamps),
         )
         return out
+
+
+def _ffmpeg_extract_frames(
+    mp4_bytes: bytes,
+) -> list[tuple[float, bytes]]:
+    """Run ffmpeg to extract scene-change frames. Returns (seconds, jpeg_bytes)."""
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(mp4_bytes)
+        in_path = f.name
+    try:
+        return _ffmpeg_extract_frames_at_path(in_path)
+    finally:
+        try:
+            os.unlink(in_path)
+        except Exception:
+            pass
 
 
 SYSTEM_PROMPT = """You analyze frames from a video recording of a home tour.
@@ -358,12 +379,10 @@ def analyze_single_image(
     return out
 
 
-def analyze_video(mp4_bytes: bytes) -> list[VisualObservation]:
-    """Top-level entry: extract frames + run vision over batches.
-
-    Returns observations ready to insert; caller fills in house_id/source.
-    """
-    frames = _ffmpeg_extract_frames(mp4_bytes)
+def analyze_video_at_path(path: str) -> list[VisualObservation]:
+    """Path-based variant — preferred when the caller can stream the
+    video to disk to avoid holding multi-hundred-MB bytes in memory."""
+    frames = _ffmpeg_extract_frames_at_path(path)
     if not frames:
         return []
 
@@ -381,3 +400,20 @@ def analyze_video(mp4_bytes: bytes) -> list[VisualObservation]:
         all_obs.extend(_vision_call(batch))
     log.info("vision total observations: %d", len(all_obs))
     return all_obs
+
+
+def analyze_video(mp4_bytes: bytes) -> list[VisualObservation]:
+    """Top-level entry: extract frames + run vision over batches.
+
+    Returns observations ready to insert; caller fills in house_id/source.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        f.write(mp4_bytes)
+        in_path = f.name
+    try:
+        return analyze_video_at_path(in_path)
+    finally:
+        try:
+            os.unlink(in_path)
+        except Exception:
+            pass
