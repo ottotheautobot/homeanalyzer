@@ -15,7 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
@@ -143,6 +143,65 @@ def create_house(
     data["tour_id"] = tour_id
     res = sb.table("houses").insert(data).execute()
     return _to_house_out(res.data[0])
+
+
+class ParseListingIn(BaseModel):
+    url: str = Field(max_length=2000)
+
+
+class ParseListingOut(BaseModel):
+    address: str | None = None
+    list_price: int | None = None
+    price_kind: str | None = None
+    sqft: int | None = None
+    beds: int | None = None
+    baths: float | None = None
+    photo_url: str | None = None
+    listing_url: str
+    source: str  # "jsonld" | "meta" | "haiku" | "fetch_failed"
+
+
+@router.post("/houses/parse-listing", response_model=ParseListingOut)
+def parse_listing(
+    payload: ParseListingIn,
+    _: AuthUser = Depends(current_user),
+) -> ParseListingOut:
+    """Best-effort scrape of bed/bath/sqft/price/photo from a pasted
+    listing URL. Realty sites block aggressively; this falls back
+    through OG tags -> JSON-LD -> Haiku-LLM extraction. Frontend
+    pre-fills whatever came back."""
+    from app.services.listing import parse_listing_url
+
+    url = payload.url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Listing URL must start with http:// or https://",
+        )
+    data = parse_listing_url(url)
+    return ParseListingOut(**data)
+
+
+@router.post("/houses/parse-listing-image", response_model=ParseListingOut)
+async def parse_listing_image_route(
+    image: UploadFile = File(...),
+    _: AuthUser = Depends(current_user),
+) -> ParseListingOut:
+    """Read a listing screenshot via Haiku Vision and extract structured
+    fields. Primary path for listing import — works around the realty
+    industry's anti-bot blocks because the screenshot originates from
+    the user's authenticated device session."""
+    from app.services.listing import parse_listing_image
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty image")
+    mime = image.content_type or "image/jpeg"
+    data = parse_listing_image(image_bytes, mime)
+    # Carry an empty listing_url through the response shape — image
+    # path doesn't have one.
+    data.setdefault("listing_url", "")
+    return ParseListingOut(**data)
 
 
 @router.get("/houses", response_model=list[HouseOut])

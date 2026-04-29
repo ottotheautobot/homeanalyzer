@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { Camera, MapPin, Search } from "lucide-react";
+import { Camera, ImageIcon, Loader2, MapPin, Search, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -11,6 +11,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clientFetch } from "@/lib/api-client";
 import type { House } from "@/lib/types";
+
+type ParseListingOut = {
+  address: string | null;
+  list_price: number | null;
+  price_kind: "sale" | "rent" | null;
+  sqft: number | null;
+  beds: number | null;
+  baths: number | null;
+  photo_url: string | null;
+  listing_url: string;
+  source: "jsonld" | "meta" | "haiku" | "image" | "fetch_failed" | "image_failed";
+};
 
 type Form = {
   address: string;
@@ -80,7 +92,108 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [geoStatus, setGeoStatus] = useState<string | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [showUrlImport, setShowUrlImport] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
   const photoRef = useRef<HTMLInputElement>(null);
+  const screenshotRef = useRef<HTMLInputElement>(null);
+
+  function applyParsed(d: ParseListingOut, opts: { setPhoto?: boolean }) {
+    const next: Partial<Form> = {};
+    let filled = 0;
+    if (d.address) {
+      next.address = d.address;
+      filled++;
+    }
+    if (d.list_price != null) {
+      next.list_price = String(d.list_price);
+      filled++;
+    }
+    if (d.price_kind === "sale" || d.price_kind === "rent") {
+      next.price_kind = d.price_kind;
+    }
+    if (d.sqft != null) {
+      next.sqft = String(d.sqft);
+      filled++;
+    }
+    if (d.beds != null) {
+      next.beds = String(d.beds);
+      filled++;
+    }
+    if (d.baths != null) {
+      next.baths = String(d.baths);
+      filled++;
+    }
+    setForm((f) => ({ ...f, ...next }));
+    return filled;
+  }
+
+  const importImage = useMutation({
+    mutationFn: async (file: File): Promise<ParseListingOut> => {
+      const fd = new FormData();
+      fd.append("image", file, file.name);
+      const data = await clientFetch<ParseListingOut>(
+        "/houses/parse-listing-image",
+        { method: "POST", body: fd },
+      );
+      return data;
+    },
+    onMutate: () => {
+      setImportNote(null);
+      setImportError(null);
+    },
+    onSuccess: (d, file) => {
+      const filled = applyParsed(d, { setPhoto: true });
+      if (filled === 0) {
+        setImportError(
+          "Couldn't read any fields from that screenshot. Try a cleaner crop or fill in manually.",
+        );
+        return;
+      }
+      // The screenshot itself becomes the curb-appeal photo if the
+      // user hasn't already picked one — saves them a step and gives
+      // every house a visual.
+      if (!photo) {
+        setPhoto(file);
+      }
+      setImportNote(`Imported ${filled} field${filled === 1 ? "" : "s"} from screenshot.`);
+    },
+    onError: (e) => {
+      setImportError(
+        e instanceof Error ? e.message : "Couldn't read that screenshot.",
+      );
+    },
+  });
+
+  const importUrlMutation = useMutation({
+    mutationFn: async (url: string): Promise<ParseListingOut> =>
+      clientFetch<ParseListingOut>("/houses/parse-listing", {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      }),
+    onMutate: () => {
+      setImportNote(null);
+      setImportError(null);
+    },
+    onSuccess: (d) => {
+      const filled = applyParsed(d, {});
+      if (d.source === "fetch_failed" || filled === 0) {
+        setImportError(
+          "That listing site is blocking us — try a screenshot of the page instead.",
+        );
+        return;
+      }
+      setImportNote(`Imported ${filled} field${filled === 1 ? "" : "s"} from URL.`);
+      setShowUrlImport(false);
+      setImportUrl("");
+    },
+    onError: (e) => {
+      setImportError(
+        e instanceof Error ? e.message : "Couldn't read that URL.",
+      );
+    },
+  });
 
   useEffect(() => {
     if (!photo) {
@@ -168,7 +281,95 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      {/* Listing import — primary path is screenshot upload. URL paste
+          is a fallback for sites that don't block (rare) but kept
+          available behind a "use a URL" link. */}
+      <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/20 p-3 space-y-2.5">
+        <div className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+          <Sparkles className="size-4 text-primary shrink-0 mt-0.5" />
+          <span className="leading-snug">
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+              Auto-fill from a listing.
+            </span>{" "}
+            Screenshot a Zillow/Redfin/etc. page on your phone and drop
+            it here — we&apos;ll pull out the address, price, beds,
+            baths, and sqft.
+          </span>
+        </div>
+        <input
+          ref={screenshotRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) importImage.mutate(file);
+            e.target.value = "";
+          }}
+        />
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => screenshotRef.current?.click()}
+            disabled={importImage.isPending || importUrlMutation.isPending}
+          >
+            {importImage.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ImageIcon className="size-4" strokeWidth={2} />
+            )}
+            <span className="ml-1.5">Upload screenshot</span>
+          </Button>
+          {!showUrlImport ? (
+            <button
+              type="button"
+              className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:underline"
+              onClick={() => setShowUrlImport(true)}
+            >
+              or paste a URL
+            </button>
+          ) : null}
+        </div>
+        {showUrlImport ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={importUrl}
+              onChange={(e) => setImportUrl(e.target.value)}
+              placeholder="https://www.zillow.com/homedetails/…"
+              disabled={importUrlMutation.isPending}
+              className="flex-1"
+            />
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => importUrl.trim() && importUrlMutation.mutate(importUrl.trim())}
+              disabled={
+                importUrlMutation.isPending || !importUrl.trim()
+              }
+            >
+              {importUrlMutation.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                "Try URL"
+              )}
+            </Button>
+          </div>
+        ) : null}
+        {importNote ? (
+          <p className="text-xs text-emerald-600 dark:text-emerald-400">
+            {importNote}
+          </p>
+        ) : null}
+        {importError ? (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {importError}
+          </p>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2">
           <div className="flex items-center justify-between">
