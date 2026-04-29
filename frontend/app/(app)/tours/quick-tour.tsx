@@ -5,8 +5,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { clientFetch } from "@/lib/api-client";
@@ -60,11 +60,11 @@ export function QuickTourButton() {
           </p>
           <div className="space-y-1.5">
             <Label htmlFor="qt-address">Address</Label>
-            <Input
+            <AddressAutocomplete
               id="qt-address"
-              autoFocus
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={setAddress}
+              onSelect={(s) => setAddress(s.address)}
               placeholder="123 Main St, Fort Lauderdale FL"
               maxLength={300}
             />

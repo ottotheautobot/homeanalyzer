@@ -4,6 +4,7 @@ import { Briefcase, Dumbbell, GraduationCap, Heart, Loader2, MapPin, Plus, Trash
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +48,10 @@ export function SavedLocationsForm({
   const [locations, setLocations] = useState<SavedLocation[]>(initial);
   const [draftLabel, setDraftLabel] = useState("");
   const [draftAddress, setDraftAddress] = useState("");
+  const [draftCoords, setDraftCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
   const [draftKind, setDraftKind] = useState<SavedLocation["kind"]>("other");
   const [error, setError] = useState<string | null>(null);
 
@@ -67,21 +72,37 @@ export function SavedLocationsForm({
       if (!draftLabel.trim() || !draftAddress.trim()) {
         throw new Error("Both label and address are required.");
       }
-      const [{ id }, geo] = await Promise.all([
-        clientFetch<NewIdResponse>("/me/saved-locations/new-id", {
-          method: "POST",
-        }),
-        clientFetch<GeocodeResponse>("/me/saved-locations/geocode", {
-          method: "POST",
-          body: JSON.stringify({ address: draftAddress.trim() }),
-        }),
-      ]);
+      // Mint an id; coords from the autocomplete pick if we have them,
+      // otherwise fall back to server-side geocode of the typed text.
+      const idPromise = clientFetch<NewIdResponse>(
+        "/me/saved-locations/new-id",
+        { method: "POST" },
+      );
+      let lat: number;
+      let lng: number;
+      let resolvedAddress = draftAddress.trim();
+      if (draftCoords) {
+        lat = draftCoords.lat;
+        lng = draftCoords.lng;
+      } else {
+        const geo = await clientFetch<GeocodeResponse>(
+          "/me/saved-locations/geocode",
+          {
+            method: "POST",
+            body: JSON.stringify({ address: draftAddress.trim() }),
+          },
+        );
+        lat = geo.lat;
+        lng = geo.lng;
+        resolvedAddress = geo.address;
+      }
+      const { id } = await idPromise;
       return {
         id,
         label: draftLabel.trim().slice(0, 60),
-        address: geo.address,
-        lat: geo.lat,
-        lng: geo.lng,
+        address: resolvedAddress,
+        lat,
+        lng,
         kind: draftKind,
       };
     },
@@ -90,6 +111,7 @@ export function SavedLocationsForm({
       setLocations(next);
       setDraftLabel("");
       setDraftAddress("");
+      setDraftCoords(null);
       setDraftKind("other");
       setError(null);
       persist.mutate(next);
@@ -183,11 +205,19 @@ export function SavedLocationsForm({
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="loc-address">Address</Label>
-          <Input
+          <AddressAutocomplete
             id="loc-address"
             placeholder="123 Main St, Fort Lauderdale, FL"
             value={draftAddress}
-            onChange={(e) => setDraftAddress(e.target.value)}
+            onChange={(next) => {
+              setDraftAddress(next);
+              // Free-text edit invalidates any previously-picked coords.
+              setDraftCoords(null);
+            }}
+            onSelect={(s) => {
+              setDraftAddress(s.address);
+              setDraftCoords({ lat: s.lat, lng: s.lng });
+            }}
             maxLength={300}
             disabled={add.isPending}
           />

@@ -5,6 +5,7 @@ import { Camera, MapPin, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { AddressAutocomplete } from "@/components/address-autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -181,12 +182,19 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
               Use my location
             </button>
           </div>
-          <Input
+          <AddressAutocomplete
             id="address"
             value={form.address}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, address: e.target.value }))
+            onChange={(next) =>
+              setForm((f) => ({ ...f, address: next }))
             }
+            onSelect={(s) => {
+              // The picked address replaces any free-text input. We
+              // don't yet capture coords client-side for new-house —
+              // backend lazy-geocodes when the map loads. Future:
+              // pass lat/lng through so we skip the lazy step.
+              setForm((f) => ({ ...f, address: s.address }));
+            }}
             placeholder="123 Sea Breeze Ln, Fort Lauderdale, FL"
             required
             disabled={create.isPending}
