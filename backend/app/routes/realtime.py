@@ -83,7 +83,8 @@ async def start_tour(
     if not zoom_url:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "No Zoom URL: pass zoom_url, set tours.zoom_pmr_url, or set users.default_zoom_url",
+            "We need a Zoom meeting URL to send the bot to. "
+            "Either paste one here, or set a default in Settings so you don't have to enter it each time.",
         )
 
     provider = get_meeting_provider()

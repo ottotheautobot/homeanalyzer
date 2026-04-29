@@ -157,7 +157,7 @@ export default async function HousePage({
           ) : (
             <p className="text-sm text-zinc-500">
               {house.status === "synthesizing"
-                ? "Bot left the meeting. Generating the brief now — this usually takes about a minute."
+                ? "Tour complete. Transcribing audio, extracting observations, and writing the brief — this can take a few minutes for longer tours."
                 : "Tour complete."}
             </p>
           )}
