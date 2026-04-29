@@ -105,7 +105,7 @@ export function SwipeableHouseRow({
             setRevealed(false);
           }
         }}
-        className="relative block rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-primary/50 hover:shadow-sm transition-all"
+        className="relative block rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-primary/50 hover:shadow-sm active:bg-zinc-50 dark:active:bg-zinc-900 active:scale-[0.99] transition-all"
         style={{
           transform: `translateX(${offset}px)`,
           transition: dragging.current ? "none" : "transform 200ms",
