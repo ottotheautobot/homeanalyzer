@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
+import { HousePhoto } from "@/components/house-photo";
+import { ScoreBadge } from "@/components/score-badge";
+import { StatusPill } from "@/components/status-pill";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { clientFetch } from "@/lib/api-client";
@@ -12,13 +15,6 @@ import type { House } from "@/lib/types";
 
 const SWIPE_REVEAL = 96;
 const SWIPE_THRESHOLD = 40;
-
-const STATUS_TONE: Record<House["status"], string> = {
-  upcoming: "text-zinc-500",
-  touring: "text-amber-600 dark:text-amber-400",
-  synthesizing: "text-amber-600 dark:text-amber-400",
-  completed: "text-emerald-600 dark:text-emerald-400",
-};
 
 function formatPrice(n: number | null, kind: House["price_kind"]) {
   if (n == null) return null;
@@ -111,38 +107,53 @@ export function SwipeableHouseRow({
           transition: dragging.current ? "none" : "transform 200ms",
         }}
       >
-        <div className="flex items-center gap-3">
-          {house.photo_signed_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+        <div className="flex items-center gap-3.5">
+          <div className="relative shrink-0">
+            <HousePhoto
               src={house.photo_signed_url}
-              alt=""
-              className="size-14 rounded-lg object-cover shrink-0 border border-zinc-200 dark:border-zinc-800"
+              className="size-20"
+              rounded="rounded-xl"
             />
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <div className="font-medium truncate">{house.address}</div>
-            <div className="text-sm text-zinc-600 dark:text-zinc-400 truncate">
+            {house.overall_score != null ? (
+              <ScoreBadge
+                score={house.overall_score}
+                size="sm"
+                className="absolute -top-1.5 -right-1.5 ring-2 ring-white dark:ring-zinc-950"
+              />
+            ) : null}
+          </div>
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="font-semibold leading-tight line-clamp-2">
+              {house.address}
+            </div>
+            {price ? (
+              <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300 tabular-nums">
+                {price}
+              </div>
+            ) : null}
+            <div className="flex items-center gap-2 flex-wrap">
+              <StatusPill status={house.status} />
               {[
-                price,
                 house.beds != null ? `${house.beds} bd` : null,
                 house.baths != null ? `${house.baths} ba` : null,
                 house.sqft != null
                   ? `${house.sqft.toLocaleString()} sqft`
                   : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
+              ].filter(Boolean).length > 0 ? (
+                <span className="text-xs text-zinc-500">
+                  {[
+                    house.beds != null ? `${house.beds} bd` : null,
+                    house.baths != null ? `${house.baths} ba` : null,
+                    house.sqft != null
+                      ? `${house.sqft.toLocaleString()} sqft`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              ) : null}
             </div>
           </div>
-          <span
-            className={`text-xs uppercase tracking-wide shrink-0 ${STATUS_TONE[house.status]}`}
-          >
-            {house.status}
-            {house.overall_score != null
-              ? ` · ${house.overall_score.toFixed(1)}`
-              : ""}
-          </span>
         </div>
       </Link>
 

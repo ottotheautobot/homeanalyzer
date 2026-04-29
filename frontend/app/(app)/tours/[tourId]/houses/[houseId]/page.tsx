@@ -1,7 +1,10 @@
 import Link from "next/link";
 
+import { HousePhoto } from "@/components/house-photo";
 import { LiveRefresh } from "@/components/live-refresh";
 import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
+import { ScoreBadge } from "@/components/score-badge";
+import { StatusPill } from "@/components/status-pill";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
@@ -10,31 +13,11 @@ import { HouseTabs, type TabSpec } from "./house-tabs";
 import { LiveTour } from "./live-tour";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
-import { PhotoThumbnail } from "./photo-thumbnail";
 import { RecordingPlayer } from "./recording-player";
 import { RetryFinalize } from "./retry-finalize";
 import { StartTour } from "./start-tour";
 import { Synthesis } from "./synthesis";
 import { TranscriptFeed } from "./transcript-feed";
-
-const STATUS_PILL: Record<House["status"], { label: string; cls: string }> = {
-  upcoming: {
-    label: "Not toured",
-    cls: "bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400",
-  },
-  touring: {
-    label: "Live",
-    cls: "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400",
-  },
-  synthesizing: {
-    label: "Generating brief…",
-    cls: "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400",
-  },
-  completed: {
-    label: "Brief ready",
-    cls: "bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400",
-  },
-};
 
 function formatPrice(n: number | null, kind: House["price_kind"]) {
   if (n == null) return null;
@@ -62,14 +45,6 @@ export default async function HousePage({
   ]);
 
   const price = formatPrice(house.list_price, house.price_kind);
-  const meta = [
-    price,
-    house.beds != null ? `${house.beds} bd` : null,
-    house.baths != null ? `${house.baths} ba` : null,
-    house.sqft != null ? `${house.sqft.toLocaleString()} sqft` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
 
   const isLiveMultiParty = house.status === "touring" && !!house.bot_id;
   const hasRecording =
@@ -207,53 +182,65 @@ export default async function HousePage({
         >
           ← Tour
         </Link>
-        <div className="mt-1 flex items-start justify-between gap-3">
-          <div className="min-w-0 flex items-center gap-3">
-            {house.photo_signed_url ? (
-              <PhotoThumbnail src={house.photo_signed_url} />
+        {/* Hero card: photo banner with score overlay (when scored), then
+            address + price + meta + status pill below. Replaces the
+            previous tiny-thumbnail layout that buried the score in the
+            corner. */}
+        <div className="mt-2 overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
+          <div className="relative aspect-[16/9] sm:aspect-[3/1]">
+            <HousePhoto
+              src={house.photo_signed_url}
+              alt={house.address}
+              className="absolute inset-0 h-full w-full"
+              rounded=""
+            />
+            {/* Score overlay top-right when we have one. */}
+            {house.overall_score != null ? (
+              <div className="absolute top-3 right-3">
+                <ScoreBadge score={house.overall_score} size="lg" />
+              </div>
             ) : null}
-            <div className="min-w-0">
-              <h1 className="text-base font-semibold tracking-tight leading-tight">
+            {/* Status pill top-left for at-a-glance state. */}
+            <div className="absolute top-3 left-3">
+              <StatusPill status={house.status} />
+            </div>
+          </div>
+          <div className="p-4 space-y-2">
+            <div>
+              <h1 className="text-lg sm:text-xl font-semibold tracking-tight leading-tight">
                 {house.address}
               </h1>
-              {meta ? (
-                <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
-                  {meta}
+              {price ? (
+                <p className="mt-1 text-base font-medium text-zinc-700 dark:text-zinc-300 tabular-nums">
+                  {price}
                 </p>
               ) : null}
             </div>
-          </div>
-          <div className="shrink-0 flex flex-col items-end gap-1.5">
-            <span
-              className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md ${STATUS_PILL[house.status].cls}`}
-            >
-              {house.status === "touring" ? (
-                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              {[
+                house.beds != null ? `${house.beds} bd` : null,
+                house.baths != null ? `${house.baths} ba` : null,
+                house.sqft != null
+                  ? `${house.sqft.toLocaleString()} sqft`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || (
+                <span className="italic">No size info yet</span>
+              )}
+              {house.tour_started_at ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <time dateTime={house.tour_started_at}>
+                    Toured{" "}
+                    {new Date(house.tour_started_at).toLocaleString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </time>
+                </>
               ) : null}
-              {STATUS_PILL[house.status].label}
-            </span>
-            {house.overall_score != null ? (
-              <span className="text-xs text-zinc-500">
-                Score{" "}
-                <span className="font-semibold text-zinc-900 dark:text-zinc-100 tabular-nums">
-                  {house.overall_score.toFixed(1)}
-                </span>
-              </span>
-            ) : null}
-            {house.tour_started_at ? (
-              <time
-                className="text-xs text-zinc-500"
-                dateTime={house.tour_started_at}
-              >
-                Toured{" "}
-                {new Date(house.tour_started_at).toLocaleString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </time>
-            ) : null}
+            </div>
           </div>
         </div>
       </div>
