@@ -1,4 +1,6 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from uuid import uuid4
 
@@ -7,6 +9,7 @@ from app.deps import AuthUser, current_user
 from app.services import routing
 from app.services.geocode import autocomplete_addresses, geocode_address
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["me"])
 
 
@@ -93,13 +96,46 @@ def get_me(user: AuthUser = Depends(current_user)) -> MeOut:
 
 
 @router.patch("/me", response_model=MeOut)
-def patch_me(
-    payload: MePatch,
+async def patch_me(
+    request: Request,
     background_tasks: BackgroundTasks,
     user: AuthUser = Depends(current_user),
 ) -> MeOut:
     """Update name, default Zoom URL, and/or saved locations. Empty string
     on Zoom URL = clear it. Omitting a field = no change."""
+    # Read the body manually so we can log the raw shape on validation
+    # failure — gives us a paper trail for the "saved_locations item
+    # isn't a dict" report from the user.
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = None
+    log.info(
+        "PATCH /me user=%s content_type=%s raw_keys=%s saved_loc_sample=%s",
+        user.id,
+        request.headers.get("content-type"),
+        list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
+        (
+            (raw or {}).get("saved_locations", "<absent>")[:1]
+            if isinstance(raw, dict) and isinstance(raw.get("saved_locations"), list)
+            else "<not-a-list-or-absent>"
+        ),
+    )
+
+    try:
+        payload = MePatch.model_validate(raw or {})
+    except Exception as e:
+        log.error(
+            "PATCH /me validation failed user=%s error=%s raw=%s",
+            user.id,
+            e,
+            raw,
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Invalid request body: {e}",
+        ) from e
+
     update: dict = {}
     if payload.name is not None:
         cleaned = payload.name.strip()
