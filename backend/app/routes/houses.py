@@ -204,6 +204,57 @@ async def parse_listing_image_route(
     return ParseListingOut(**data)
 
 
+class AutoFillIn(BaseModel):
+    address: str = Field(min_length=4, max_length=300)
+
+
+@router.post("/houses/auto-fill", response_model=ParseListingOut)
+def auto_fill_listing(
+    payload: AutoFillIn,
+    _: AuthUser = Depends(current_user),
+) -> ParseListingOut:
+    """Fully-automated listing fetch. Given an address, render the
+    Zillow search-results page in a real headless Chrome (Browserless,
+    stealth-mode), screenshot it, run Haiku Vision over the screenshot
+    to extract bed/bath/sqft/price, return structured fields.
+
+    Falls back to source="not_configured" / "render_failed" when
+    Browserless isn't set up or anti-bot blocks even the stealth
+    browser; frontend then shows the manual screenshot path."""
+    import re
+
+    from app.services import browserless
+    from app.services.listing import parse_listing_image
+
+    address = payload.address.strip()
+
+    # Empty or unconfigured paths return a usable shape so the caller
+    # can degrade gracefully.
+    if not browserless.is_configured():
+        return ParseListingOut(
+            listing_url="",
+            source="not_configured",
+        )
+
+    # Slugify the address for Zillow's URL pattern. Their search URL
+    # accepts roughly any whitespace-separated address; for fully-
+    # qualified addresses Zillow often redirects directly to the
+    # listing page.
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", address).strip("-")
+    zillow_url = f"https://www.zillow.com/homes/{slug}_rb/"
+
+    img_bytes = browserless.screenshot(zillow_url)
+    if not img_bytes:
+        return ParseListingOut(
+            listing_url=zillow_url,
+            source="render_failed",
+        )
+
+    data = parse_listing_image(img_bytes, "image/png")
+    data.setdefault("listing_url", zillow_url)
+    return ParseListingOut(**data)
+
+
 @router.get("/houses", response_model=list[HouseOut])
 def list_all_houses(
     user: AuthUser = Depends(current_user),

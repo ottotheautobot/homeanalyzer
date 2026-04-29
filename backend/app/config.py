@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # workaround).
     mapbox_api_token: str = ""
 
+    # Browserless — managed headless Chrome. Used to render a Zillow
+    # search page server-side (with stealth mode to bypass anti-bot)
+    # so we can screenshot it and let Haiku Vision extract the
+    # listing details. Signup at browserless.io. Empty = the
+    # /houses/auto-fill endpoint returns "service not configured".
+    browserless_api_token: str = ""
+
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.
     resend_api_key: str = ""

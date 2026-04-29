@@ -21,7 +21,15 @@ type ParseListingOut = {
   baths: number | null;
   photo_url: string | null;
   listing_url: string;
-  source: "jsonld" | "meta" | "haiku" | "image" | "fetch_failed" | "image_failed";
+  source:
+    | "jsonld"
+    | "meta"
+    | "haiku"
+    | "image"
+    | "fetch_failed"
+    | "image_failed"
+    | "not_configured"
+    | "render_failed";
 };
 
 type Form = {
@@ -195,6 +203,50 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
     },
   });
 
+  // Server-side render-and-screenshot via Browserless. Given just the
+  // address, we render a Zillow search page in a real Chrome (stealth)
+  // and feed the screenshot to Haiku Vision. One tap → form fills.
+  const autoFill = useMutation({
+    mutationFn: async (address: string): Promise<ParseListingOut> =>
+      clientFetch<ParseListingOut>("/houses/auto-fill", {
+        method: "POST",
+        body: JSON.stringify({ address }),
+      }),
+    onMutate: () => {
+      setImportNote(null);
+      setImportError(null);
+    },
+    onSuccess: (d) => {
+      if (d.source === "not_configured") {
+        setImportError(
+          "Auto-fill isn't configured on this server. Use the screenshot path below.",
+        );
+        return;
+      }
+      if (d.source === "render_failed") {
+        setImportError(
+          "Couldn't reach the listing site. Try a screenshot of the page instead.",
+        );
+        return;
+      }
+      const filled = applyParsed(d, {});
+      if (filled === 0) {
+        setImportError(
+          "Found the page but couldn't pull any fields. Try a screenshot or fill in manually.",
+        );
+        return;
+      }
+      setImportNote(
+        `Auto-filled ${filled} field${filled === 1 ? "" : "s"} from Zillow.`,
+      );
+    },
+    onError: (e) => {
+      setImportError(
+        e instanceof Error ? e.message : "Auto-fill failed.",
+      );
+    },
+  });
+
   useEffect(() => {
     if (!photo) {
       setPhotoPreview(null);
@@ -282,9 +334,16 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
 
   return (
     <div className="space-y-4">
-      {/* Listing import — primary path is screenshot upload. URL paste
-          is a fallback for sites that don't block (rare) but kept
-          available behind a "use a URL" link. */}
+      {/* Listing import — three paths from highest-leverage to most
+          manual:
+          1. Auto-fill — type the address, we render Zillow in a real
+             headless Chrome (Browserless, stealth-mode) and let
+             Haiku Vision read the screenshot. One tap, ~5s wait.
+          2. Upload a screenshot from your phone — works around
+             anti-bot since the page came from your authenticated
+             device.
+          3. Paste a URL — only works on smaller sites that don't
+             block scrapers. */}
       <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/20 p-3 space-y-2.5">
         <div className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
           <Sparkles className="size-4 text-primary shrink-0 mt-0.5" />
@@ -292,9 +351,9 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
             <span className="font-medium text-zinc-900 dark:text-zinc-100">
               Auto-fill from a listing.
             </span>{" "}
-            Screenshot a Zillow/Redfin/etc. page on your phone and drop
-            it here — we&apos;ll pull out the address, price, beds,
-            baths, and sqft.
+            Type the address above, then tap Auto-fill — we&apos;ll
+            look it up on Zillow and pull in beds, baths, sqft, price.
+            Or drop a screenshot from your phone.
           </span>
         </div>
         <input
@@ -312,9 +371,33 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           <Button
             type="button"
             size="sm"
+            onClick={() => autoFill.mutate(form.address.trim())}
+            disabled={
+              autoFill.isPending ||
+              importImage.isPending ||
+              importUrlMutation.isPending ||
+              form.address.trim().length < 8
+            }
+          >
+            {autoFill.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Sparkles className="size-4" strokeWidth={2} />
+            )}
+            <span className="ml-1.5">
+              {autoFill.isPending ? "Looking up…" : "Auto-fill from listing"}
+            </span>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
             variant="outline"
             onClick={() => screenshotRef.current?.click()}
-            disabled={importImage.isPending || importUrlMutation.isPending}
+            disabled={
+              autoFill.isPending ||
+              importImage.isPending ||
+              importUrlMutation.isPending
+            }
           >
             {importImage.isPending ? (
               <Loader2 className="size-4 animate-spin" />

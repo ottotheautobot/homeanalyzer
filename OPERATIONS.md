@@ -51,6 +51,14 @@ General App with **Meeting SDK** + **Programmatic Join** features both toggled o
 |---|---|
 | API key | Railway env `DEEPGRAM_API_KEY` |
 
+## Browserless (listing auto-fill)
+
+Optional. When set, the "Auto-fill from listing" button on the new-house form renders a Zillow search page in a real headless Chrome (with stealth mode + ad blocking) and ships the screenshot to Haiku Vision for field extraction. Without it, the user can still upload a manual screenshot or paste a URL.
+
+| Credential | Where | Notes |
+|---|---|---|
+| API token | Railway env `BROWSERLESS_API_TOKEN` | Free trial, then $5/mo for 1k pages or pay-per-use ~$0.01/page. Sign up at browserless.io. We hit the v2 `/screenshot` endpoint with `?stealth=true&blockAds=true`. |
+
 ## Routing API (commute distances on /map)
 
 Optional. Either provider gives the saved-locations feature real drive time + distance. With neither configured, the feature falls back to as-the-crow-flies haversine miles with no time estimate — still functional, just less precise. Backend tries ORS first, then Mapbox, then haversine.
