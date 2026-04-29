@@ -30,6 +30,7 @@ type ParseListingOut = {
     | "image_failed"
     | "not_configured"
     | "render_failed";
+  debug_screenshot_url?: string | null;
 };
 
 type Form = {
@@ -102,6 +103,7 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
   const [geoStatus, setGeoStatus] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [debugScreenshotUrl, setDebugScreenshotUrl] = useState<string | null>(null);
   const [showUrlImport, setShowUrlImport] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const photoRef = useRef<HTMLInputElement>(null);
@@ -215,8 +217,12 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
     onMutate: () => {
       setImportNote(null);
       setImportError(null);
+      setDebugScreenshotUrl(null);
     },
     onSuccess: (d) => {
+      if (d.debug_screenshot_url) {
+        setDebugScreenshotUrl(d.debug_screenshot_url);
+      }
       if (d.source === "not_configured") {
         setImportError(
           "Auto-fill isn't configured on this server. Use the screenshot path below.",
@@ -232,12 +238,12 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
       const filled = applyParsed(d, {});
       if (filled === 0) {
         setImportError(
-          "Found the page but couldn't pull any fields. Try a screenshot or fill in manually.",
+          "Rendered the page but couldn't pull any fields. The site likely served a captcha or anti-bot page. Try a screenshot from your phone.",
         );
         return;
       }
       setImportNote(
-        `Auto-filled ${filled} field${filled === 1 ? "" : "s"} from Zillow.`,
+        `Auto-filled ${filled} field${filled === 1 ? "" : "s"} from listing.`,
       );
     },
     onError: (e) => {
@@ -447,9 +453,21 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           </p>
         ) : null}
         {importError ? (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            {importError}
-          </p>
+          <div className="space-y-1">
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {importError}
+            </p>
+            {debugScreenshotUrl ? (
+              <a
+                href={debugScreenshotUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-xs text-primary hover:underline inline-block"
+              >
+                See what we saw →
+              </a>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

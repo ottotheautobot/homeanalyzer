@@ -158,7 +158,10 @@ class ParseListingOut(BaseModel):
     baths: float | None = None
     photo_url: str | None = None
     listing_url: str
-    source: str  # "jsonld" | "meta" | "haiku" | "fetch_failed"
+    source: str  # "jsonld" | "meta" | "haiku" | "image" | "fetch_failed" | ...
+    # Set on auto-fill failures so the user can see what we actually
+    # rendered. Signed URL, expires in 10 minutes.
+    debug_screenshot_url: str | None = None
 
 
 @router.post("/houses/parse-listing", response_model=ParseListingOut)
@@ -213,46 +216,87 @@ def auto_fill_listing(
     payload: AutoFillIn,
     _: AuthUser = Depends(current_user),
 ) -> ParseListingOut:
-    """Fully-automated listing fetch. Given an address, render the
-    Zillow search-results page in a real headless Chrome (Browserless,
+    """Fully-automated listing fetch. Given an address, render a
+    real-estate search page in a headless Chrome (Browserless,
     stealth-mode), screenshot it, run Haiku Vision over the screenshot
     to extract bed/bath/sqft/price, return structured fields.
 
-    Falls back to source="not_configured" / "render_failed" when
-    Browserless isn't set up or anti-bot blocks even the stealth
-    browser; frontend then shows the manual screenshot path."""
+    Tries Zillow and Redfin in sequence — if Zillow's anti-bot wins,
+    Redfin's may not. On failure, surfaces the rendered screenshot via
+    a short-TTL signed URL so the user can see what went wrong (was it
+    a captcha? a no-results page? a layout we didn't anticipate?)."""
     import re
+    import time
+    from uuid import uuid4
 
     from app.services import browserless
     from app.services.listing import parse_listing_image
 
     address = payload.address.strip()
 
-    # Empty or unconfigured paths return a usable shape so the caller
-    # can degrade gracefully.
     if not browserless.is_configured():
         return ParseListingOut(
             listing_url="",
             source="not_configured",
         )
 
-    # Slugify the address for Zillow's URL pattern. Their search URL
-    # accepts roughly any whitespace-separated address; for fully-
-    # qualified addresses Zillow often redirects directly to the
-    # listing page.
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", address).strip("-")
-    zillow_url = f"https://www.zillow.com/homes/{slug}_rb/"
+    candidates = [
+        ("zillow", f"https://www.zillow.com/homes/{slug}_rb/"),
+        ("redfin", f"https://www.redfin.com/stingray/do/location-autocomplete?location={slug.replace('-', '+')}"),
+    ]
 
-    img_bytes = browserless.screenshot(zillow_url)
-    if not img_bytes:
-        return ParseListingOut(
-            listing_url=zillow_url,
-            source="render_failed",
+    last_url = ""
+    last_image_bytes: bytes | None = None
+    for site, url in candidates:
+        last_url = url
+        img_bytes = browserless.screenshot(url)
+        if not img_bytes:
+            log.warning("auto-fill: %s render returned no bytes for %s", site, url)
+            continue
+        last_image_bytes = img_bytes
+        data = parse_listing_image(img_bytes, "image/png", target_address=address)
+        if data.get("source") == "image" and any(
+            data.get(k) is not None
+            for k in ("list_price", "beds", "baths", "sqft")
+        ):
+            data.setdefault("listing_url", url)
+            return ParseListingOut(**data)
+        log.info(
+            "auto-fill: %s rendered but no fields extracted (vision source=%s)",
+            site,
+            data.get("source"),
         )
 
-    data = parse_listing_image(img_bytes, "image/png")
-    data.setdefault("listing_url", zillow_url)
-    return ParseListingOut(**data)
+    # Every candidate either failed to render or rendered without
+    # extractable fields. Stash the most recent screenshot to Storage
+    # under a short-TTL signed URL so the user can see what we saw.
+    debug_url: str | None = None
+    if last_image_bytes is not None:
+        try:
+            sb = supabase()
+            path = f"_debug/auto-fill/{int(time.time())}-{uuid4().hex[:8]}.png"
+            sb.storage.from_("tour-audio").upload(
+                path=path,
+                file=last_image_bytes,
+                file_options={"content-type": "image/png", "upsert": "true"},
+            )
+            signed = sb.storage.from_("tour-audio").create_signed_url(path, 600)
+            debug_url = signed.get("signed_url") or signed.get("signedURL")
+        except Exception:
+            log.exception("auto-fill: failed to store debug screenshot")
+
+    if last_image_bytes is None:
+        return ParseListingOut(
+            listing_url=last_url,
+            source="render_failed",
+            debug_screenshot_url=debug_url,
+        )
+    return ParseListingOut(
+        listing_url=last_url,
+        source="image_failed",
+        debug_screenshot_url=debug_url,
+    )
 
 
 @router.get("/houses", response_model=list[HouseOut])

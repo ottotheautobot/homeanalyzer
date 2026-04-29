@@ -395,11 +395,19 @@ def _looks_complete(d: dict) -> bool:
     return all(d.get(k) is not None for k in ("beds", "baths", "list_price"))
 
 
-def parse_listing_image(image_bytes: bytes, mime: str) -> ListingData:
+def parse_listing_image(
+    image_bytes: bytes,
+    mime: str,
+    target_address: str | None = None,
+) -> ListingData:
     """Read a listing screenshot/photo via Haiku Vision. Primary path
     because URL scraping is broadly blocked. The user screenshots the
     listing on their phone and uploads — the request originates from
     their device, so anti-bot rules don't apply.
+
+    target_address (optional) is passed into the prompt so Haiku knows
+    WHICH listing to focus on when the screenshot is a search-results
+    page with multiple cards. Without it Haiku may guess wrong.
 
     Returns the same shape as parse_listing_url. `source` will be
     `"image"` on success, `"image_failed"` on any error so the caller
@@ -414,6 +422,26 @@ def parse_listing_image(image_bytes: bytes, mime: str) -> ListingData:
 
     # Anthropic vision accepts image/jpeg, image/png, image/gif, image/webp.
     safe_mime = mime if mime in ("image/jpeg", "image/png", "image/gif", "image/webp") else "image/jpeg"
+
+    target_clause = (
+        f"\n\nIMPORTANT: We're looking for the property at {target_address}. "
+        "If the page is a search-results list with multiple cards, find the "
+        "one whose address best matches that address and extract from it. "
+        "Ignore other cards."
+        if target_address
+        else ""
+    )
+    prompt_text = (
+        "This is a screenshot of a real-estate page. It might be a single "
+        "listing detail page, a search-results list with one or more cards, "
+        "or a captcha / login / 'no results' page. "
+        "If listing data is visible, extract the property fields. "
+        "If a field isn't visible or you're unsure, return null. "
+        "The address should be the property's full address "
+        "(street, city, state, zip if visible). For price_kind: 'sale' "
+        "if this is a for-sale listing, 'rent' if it's a monthly rent."
+        + target_clause
+    )
 
     try:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -434,18 +462,7 @@ def parse_listing_image(image_bytes: bytes, mime: str) -> ListingData:
                                 "data": base64.b64encode(image_bytes).decode("ascii"),
                             },
                         },
-                        {
-                            "type": "text",
-                            "text": (
-                                "This is a screenshot of a real-estate listing. "
-                                "Extract the listing fields. If a field isn't "
-                                "visible or you're unsure, return null. The "
-                                "address should be the property's full address "
-                                "(street, city, state, zip if visible). For "
-                                "price_kind: 'sale' if this is a for-sale "
-                                "listing, 'rent' if it's a monthly rent."
-                            ),
-                        },
+                        {"type": "text", "text": prompt_text},
                     ],
                 }
             ],
@@ -460,6 +477,7 @@ def parse_listing_image(image_bytes: bytes, mime: str) -> ListingData:
             and block.name == "record_listing"
         ):
             data = block.input or {}
+            log.info("vision raw extracted: %s", data)
             for k in ("address", "price_kind"):
                 v = data.get(k)
                 if isinstance(v, str) and v.strip():
