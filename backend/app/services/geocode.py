@@ -142,11 +142,9 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
         except Exception:
             log.exception("ORS autocomplete failed; falling back to Photon")
 
-    # Tier 2: Photon (free, no key, OSM-only, sparse on US house
-    # numbers but works for most non-residential lookups). We proxy
-    # here so the frontend hits a single endpoint regardless of which
-    # provider actually answered. Photon 403s requests from some cloud
-    # IPs when no User-Agent is set.
+    # Tier 2: Photon (free, no key, OSM-only). Proxied so the
+    # frontend hits a single endpoint regardless of provider chain.
+    # Photon 403s some cloud IPs when no User-Agent is set.
     try:
         r = httpx.get(
             _PHOTON_URL,
@@ -163,9 +161,20 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
             if len(coords) < 2:
                 continue
             lng, lat = coords[0], coords[1]
-            # Photon doesn't ship a `label` — assemble one from parts.
-            head_parts = [props.get("housenumber"), props.get("street")]
-            head = " ".join(p for p in head_parts if p) or props.get("name") or ""
+            housenumber = props.get("housenumber")
+            street = props.get("street")
+            name = props.get("name")
+            # Photon often stuffs the house number into `name` (e.g.
+            # "Peters Road/# 8200 - (Plantation Colony)") when OSM
+            # tagging didn't break it out into `housenumber`. Detect
+            # that and prefer `name` so we don't lose the digits.
+            constructed = " ".join(p for p in [housenumber, street] if p)
+            if not housenumber and name and any(ch.isdigit() for ch in name):
+                head = name
+            elif constructed:
+                head = constructed
+            else:
+                head = name or ""
             tail_parts = [
                 props.get("city") or props.get("district"),
                 props.get("state"),
@@ -176,8 +185,48 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
             if not label:
                 continue
             out.append({"address": label, "lat": float(lat), "lng": float(lng)})
+        if out:
+            return out
     except Exception:
         log.exception("Photon autocomplete failed")
+
+    # Tier 3: Nominatim (the backend's existing geocoder for /save).
+    # Slow (1 req/s rate-limited), but it's the most lenient on
+    # US residential and named places — the same source that the user
+    # sees when they submit-without-picking. Surfacing it here means
+    # the autocomplete dropdown matches what the save path would
+    # accept.
+    try:
+        global _last_call_at
+        elapsed = time.monotonic() - _last_call_at
+        if elapsed < 1.05:
+            time.sleep(1.05 - elapsed)
+        _last_call_at = time.monotonic()
+        r = httpx.get(
+            _NOMINATIM_URL,
+            params={
+                "q": q,
+                "format": "json",
+                "limit": limit,
+                "addressdetails": 1,
+                "countrycodes": "us",
+            },
+            headers={"User-Agent": _USER_AGENT, "Accept-Language": "en"},
+            timeout=8.0,
+        )
+        r.raise_for_status()
+        for item in r.json():
+            display = item.get("display_name")
+            if not display:
+                continue
+            try:
+                lat = float(item["lat"])
+                lng = float(item["lon"])
+            except (KeyError, ValueError):
+                continue
+            out.append({"address": display, "lat": lat, "lng": lng})
+    except Exception:
+        log.exception("Nominatim autocomplete failed")
 
     return out
 

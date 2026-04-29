@@ -43,6 +43,10 @@ export function AddressAutocomplete({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState<number>(-1);
+  /** True once we've completed at least one query for the current text.
+   *  Lets us distinguish "not queried yet" from "queried, found nothing"
+   *  so we can show a helpful hint in the empty case. */
+  const [hasQueried, setHasQueried] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -78,6 +82,7 @@ export function AddressAutocomplete({
     if (q.length < MIN_QUERY_LEN) {
       setSuggestions([]);
       setLoading(false);
+      setHasQueried(false);
       return;
     }
     debounceRef.current = setTimeout(async () => {
@@ -96,13 +101,18 @@ export function AddressAutocomplete({
           { signal: controller.signal },
         );
         setSuggestions(data);
-        setOpen(data.length > 0);
+        // Open the dropdown either to show suggestions OR to show the
+        // "didn't find a match — type the full address and submit"
+        // hint. Either way we want to communicate state to the user.
+        setOpen(true);
         setActive(-1);
+        setHasQueried(true);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           // Quietly drop other errors — autocomplete failure shouldn't
           // surface a UI error; user can still type a free-form address.
           setSuggestions([]);
+          setHasQueried(true);
         }
       } finally {
         setLoading(false);
@@ -194,6 +204,12 @@ export function AddressAutocomplete({
             );
           })}
         </ul>
+      ) : open && hasQueried && !loading && suggestions.length === 0 ? (
+        <div className="absolute z-20 mt-1 left-0 right-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-lg px-3 py-2 text-xs text-zinc-500 leading-snug">
+          No matches in our address index. Type the full address and tap{" "}
+          <span className="font-medium">save / add</span> anyway — we&apos;ll
+          try to look it up another way.
+        </div>
       ) : null}
     </div>
   );
