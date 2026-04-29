@@ -6,30 +6,75 @@ import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { clientFetch } from "@/lib/api-client";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-type UploadResponse = {
+type SignedUploadResponse = {
+  signed_url: string;
+  token: string;
+  storage_path: string;
+};
+
+type ProcessResponse = {
   house_id: string;
   status: string;
-  video_storage_path: string;
   duration_seconds: number | null;
 };
+
+const STORAGE_BUCKET = "tour-audio";
+
+function extOf(filename: string): string {
+  const i = filename.lastIndexOf(".");
+  return i >= 0 ? filename.slice(i + 1).toLowerCase() : "mp4";
+}
 
 export function UploadVideo({ houseId }: { houseId: string }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [filename, setFilename] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: async (file: File): Promise<UploadResponse> => {
-      const fd = new FormData();
-      fd.append("video", file, file.name);
-      return clientFetch<UploadResponse>(`/houses/${houseId}/video`, {
-        method: "POST",
-        body: fd,
-      });
+    mutationFn: async (file: File): Promise<ProcessResponse> => {
+      // 1. Mint a signed upload URL from the backend.
+      setProgress("Preparing upload…");
+      const ext = extOf(file.name);
+      const signed = await clientFetch<SignedUploadResponse>(
+        `/houses/${houseId}/video/upload-url?ext=${encodeURIComponent(ext)}`,
+        { method: "POST" },
+      );
+
+      // 2. PUT the file directly to Supabase via the signed URL — no
+      //    Railway proxy in this path, so multi-hundred-MB uploads work.
+      setProgress(`Uploading ${(file.size / (1024 * 1024)).toFixed(0)} MB…`);
+      const supabase = createSupabaseBrowserClient();
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .uploadToSignedUrl(signed.storage_path, signed.token, file, {
+          contentType: file.type || `video/${ext}`,
+          upsert: true,
+        });
+      if (uploadError) {
+        throw new Error(uploadError.message || "Upload to storage failed");
+      }
+
+      // 3. Tell the backend the upload landed; it'll fetch + process.
+      setProgress("Starting analysis…");
+      const result = await clientFetch<ProcessResponse>(
+        `/houses/${houseId}/video/process`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storage_path: signed.storage_path }),
+        },
+      );
+      return result;
     },
     onSuccess: () => {
+      setProgress(null);
       router.refresh();
+    },
+    onError: () => {
+      setProgress(null);
     },
   });
 
@@ -54,7 +99,7 @@ export function UploadVideo({ houseId }: { houseId: string }) {
           onClick={() => fileRef.current?.click()}
           disabled={mutation.isPending}
         >
-          {mutation.isPending ? "Uploading…" : "Upload video"}
+          {mutation.isPending ? (progress ?? "Uploading…") : "Upload video"}
         </Button>
         {filename ? (
           <span className="text-sm text-zinc-600 dark:text-zinc-400 truncate">

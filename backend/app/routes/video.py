@@ -1,11 +1,21 @@
-"""Upload a tour video recorded outside the app (e.g. Voice Memos / iPhone
-camera roll when the live multi-party path didn't work). Mirrors the
-post-meeting webhook pipeline: extract audio, run vision over frames,
-run the existing audio pipeline (Whisper -> extract -> synthesize ->
-schematic), and (gated) spawn the measured-floorplan Modal job.
+"""Upload a tour video recorded outside the app (e.g. iPhone camera roll
+when the live multi-party path didn't work). Mirrors the post-meeting
+webhook pipeline: extract audio, run vision over frames, run the
+existing audio pipeline (Whisper -> extract -> synthesize -> schematic),
+and (gated) spawn the measured-floorplan Modal job.
 
-Distinct from /houses/{id}/audio: that path is audio-only and never feeds
-the vision or measured-floor-plan stages."""
+Two-step flow because tour videos are typically 100MB-1GB and Railway's
+edge proxy rejects request bodies past ~100MB:
+
+  1. POST /houses/{id}/video/upload-url -> returns a Supabase signed
+     upload URL the client uses to PUT the video directly to Storage.
+     No Railway in the upload path.
+  2. POST /houses/{id}/video/process    -> client tells us the upload is
+     done with the storage_path; backend downloads from Storage and
+     fires the analysis pipeline as a BackgroundTask.
+
+Distinct from /houses/{id}/audio: that path is audio-only and never
+feeds the vision or measured-floor-plan stages."""
 import logging
 import subprocess
 import time
@@ -17,9 +27,7 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
-    File,
     HTTPException,
-    UploadFile,
     status,
 )
 from pydantic import BaseModel
@@ -34,10 +42,19 @@ router = APIRouter(tags=["video"])
 log = logging.getLogger(__name__)
 
 
-class UploadVideoResponse(BaseModel):
+class SignedUploadResponse(BaseModel):
+    signed_url: str
+    token: str
+    storage_path: str
+
+
+class ProcessVideoBody(BaseModel):
+    storage_path: str
+
+
+class ProcessVideoResponse(BaseModel):
     house_id: str
     status: str
-    video_storage_path: str
     duration_seconds: float | None
 
 
@@ -87,7 +104,6 @@ def _process_video_upload(
     Runs vision -> audio pipeline -> (gated) measured floor plan."""
     sb = supabase()
 
-    # Probe duration for the row + the measured-floorplan gate.
     duration: float | None = None
     try:
         from app.llm.vision import probe_video_duration
@@ -137,8 +153,6 @@ def _process_video_upload(
             log.exception("vision pipeline crashed house=%s", house_id)
             sentry_sdk.capture_exception(e)
 
-    # Extract audio for the Whisper -> extract -> synthesize -> schematic
-    # pipeline. Even if extraction fails we keep the video + vision obs.
     wav_bytes = _extract_audio_wav(video_bytes)
     if not wav_bytes:
         log.warning(
@@ -214,64 +228,77 @@ def _process_video_upload(
 
 
 @router.post(
-    "/houses/{house_id}/video",
-    response_model=UploadVideoResponse,
-    status_code=status.HTTP_202_ACCEPTED,
+    "/houses/{house_id}/video/upload-url",
+    response_model=SignedUploadResponse,
 )
-async def upload_video(
+async def get_video_upload_url(
     house_id: str,
-    background_tasks: BackgroundTasks,
-    video: UploadFile = File(...),
     user: AuthUser = Depends(current_user),
-) -> UploadVideoResponse:
-    """Upload a recorded tour video and run it through the full analysis
-    pipeline (vision + transcript-derived observations + synthesis +
-    schematic + measured floor plan when the gate is on).
-
-    Use case: tour where the live Meeting BaaS path wasn't usable (no
-    signal, app failure, etc.) and you have the camera-roll video.
-    """
+    ext: str = "mp4",
+) -> SignedUploadResponse:
+    """Mint a Supabase signed upload URL the client can PUT directly to.
+    Sidesteps Railway's request-body cap for large videos."""
     get_house_for_user(house_id, user.id)
 
-    video_bytes = await video.read()
-    if not video_bytes:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty video file")
-
-    filename = video.filename or "tour.mp4"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "mp4"
-    if ext not in ("mp4", "mov", "m4v", "webm", "mkv"):
-        # Whisper + ffmpeg are tolerant, but flag obviously-wrong inputs
-        # rather than burn a Modal call on something that won't decode.
+    safe_ext = ext.lower().lstrip(".")
+    if safe_ext not in ("mp4", "mov", "m4v", "webm", "mkv"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"Unsupported video extension: .{ext}",
+            f"Unsupported video extension: .{safe_ext}",
         )
-    storage_path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.{ext}"
-    mime = video.content_type or "video/mp4"
+    storage_path = f"{house_id}/{int(time.time())}-{uuid4().hex[:8]}.{safe_ext}"
 
     sb = supabase()
-    sb.storage.from_("tour-audio").upload(
-        path=storage_path,
-        file=video_bytes,
-        file_options={"content-type": mime, "upsert": "true"},
+    try:
+        res = sb.storage.from_("tour-audio").create_signed_upload_url(storage_path)
+    except Exception as e:
+        log.exception("create_signed_upload_url failed house=%s", house_id)
+        sentry_sdk.capture_exception(e)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Could not create upload URL: {e}",
+        ) from e
+
+    return SignedUploadResponse(
+        signed_url=res["signed_url"],
+        token=res["token"],
+        storage_path=storage_path,
     )
 
-    # Mark as synthesizing immediately — the pipeline below will flip to
-    # completed (or stay synthesizing on partial-failure paths).
-    sb.table("houses").update(
-        {
-            "video_url": storage_path,
-            "status": "synthesizing",
-            "tour_started_at": "now()",
-        }
-    ).eq("id", house_id).execute()
 
-    background_tasks.add_task(
-        _process_video_upload, house_id, video_bytes, storage_path
-    )
+@router.post(
+    "/houses/{house_id}/video/process",
+    response_model=ProcessVideoResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def process_uploaded_video(
+    house_id: str,
+    body: ProcessVideoBody,
+    background_tasks: BackgroundTasks,
+    user: AuthUser = Depends(current_user),
+) -> ProcessVideoResponse:
+    """Client has uploaded video to Storage at body.storage_path; download
+    and run the full analysis pipeline (vision + transcript + synthesis +
+    schematic + measured floor plan when gated)."""
+    get_house_for_user(house_id, user.id)
 
-    # Probe duration synchronously so the response includes it — small
-    # cost (a few hundred ms) for a much better client UX.
+    sb = supabase()
+    try:
+        video_bytes = sb.storage.from_("tour-audio").download(body.storage_path)
+    except Exception as e:
+        log.exception("storage download failed house=%s path=%s", house_id, body.storage_path)
+        sentry_sdk.capture_exception(e)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Could not fetch uploaded video from storage: {e}",
+        ) from e
+
+    if not video_bytes:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Uploaded video is empty",
+        )
+
     duration: float | None = None
     try:
         from app.llm.vision import probe_video_duration
@@ -280,9 +307,21 @@ async def upload_video(
     except Exception:
         pass
 
-    return UploadVideoResponse(
+    sb.table("houses").update(
+        {
+            "video_url": body.storage_path,
+            "status": "synthesizing",
+            "tour_started_at": "now()",
+            "video_duration_seconds": duration,
+        }
+    ).eq("id", house_id).execute()
+
+    background_tasks.add_task(
+        _process_video_upload, house_id, video_bytes, body.storage_path
+    )
+
+    return ProcessVideoResponse(
         house_id=house_id,
         status="synthesizing",
-        video_storage_path=storage_path,
         duration_seconds=duration,
     )
