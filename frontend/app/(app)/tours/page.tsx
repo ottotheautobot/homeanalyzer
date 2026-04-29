@@ -11,24 +11,32 @@ import { SwipeableTourRow } from "./swipeable-tour-row";
 export default async function ToursPage() {
   const tours = await serverFetch<TourSummary[]>("/tours");
 
+  const isEmpty = tours.length === 0;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-semibold tracking-tight">Tours</h1>
-        <div className="flex items-center gap-2">
-          <QuickTourButton />
-          <Link href="/tours/new" className={buttonVariants({ size: "sm" })}>
-            <Plus className="size-4" strokeWidth={2.5} />
-            <span className="ml-1">New tour</span>
-          </Link>
-        </div>
+        {/* Hide the header CTAs in the empty state so the single big
+            "Create your first tour" call-to-action below is the only one
+            on screen — no competition, no duplication. */}
+        {isEmpty ? null : (
+          <div className="flex items-center gap-2">
+            <QuickTourButton />
+            <Link href="/tours/new" className={buttonVariants({ size: "sm" })}>
+              <Plus className="size-4" strokeWidth={2.5} />
+              <span className="ml-1">New tour</span>
+            </Link>
+          </div>
+        )}
       </div>
 
-      {tours.length === 0 ? (
+      {isEmpty ? (
         <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-12 text-center">
           <h2 className="text-base font-semibold">No tours yet</h2>
           <p className="text-sm text-zinc-500 mt-1">
-            Create a tour and add the houses you plan to visit.
+            A tour groups the houses you visit on a single trip. Create one to
+            get started.
           </p>
           <Link
             href="/tours/new"

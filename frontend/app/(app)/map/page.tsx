@@ -70,8 +70,8 @@ export default async function MapPage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-zinc-500">
-              First load only — coordinates cache afterwards. Try refreshing in
-              ~{Math.max(15, total_houses * 2)} seconds.
+              First load only — coordinates cache afterwards. Refresh in a few
+              seconds and the pins will appear.
             </p>
           </CardContent>
         </Card>

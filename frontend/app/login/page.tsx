@@ -55,10 +55,21 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           {status.kind === "sent" ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Check <span className="font-medium">{email}</span> for a sign-in
-              link. You can close this tab.
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Check <span className="font-medium">{email}</span> for a
+                sign-in link. Clicking it will sign you in even if you close
+                this tab.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => setStatus({ kind: "idle" })}
+              >
+                Use a different email
+              </Button>
+            </div>
           ) : (
             <form onSubmit={onSubmit} className="space-y-4">
               <div className="space-y-2">

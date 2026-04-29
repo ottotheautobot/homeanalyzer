@@ -136,7 +136,24 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
         }
       },
       (err) => {
-        setGeoStatus(err.message || "Location request denied");
+        // Map the GeolocationPositionError codes to plain English so a
+        // fresh user doesn't see "User denied Geolocation" jargon.
+        const PERMISSION_DENIED = 1;
+        const POSITION_UNAVAILABLE = 2;
+        const TIMEOUT = 3;
+        if (err.code === PERMISSION_DENIED) {
+          setGeoStatus(
+            "Location permission denied. Allow location access in your browser settings, or just type the address.",
+          );
+        } else if (err.code === POSITION_UNAVAILABLE) {
+          setGeoStatus(
+            "Couldn't determine your location. Try again outside, or type the address.",
+          );
+        } else if (err.code === TIMEOUT) {
+          setGeoStatus("Location lookup took too long. Try again or type the address.");
+        } else {
+          setGeoStatus("Couldn't get your location. Try typing the address instead.");
+        }
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
@@ -177,38 +194,53 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           {geoStatus ? (
             <p className="text-xs text-zinc-500">{geoStatus}</p>
           ) : null}
-          {form.address.trim().length > 5 ? (
-            <div className="flex items-center gap-3 text-xs">
-              <span className="text-zinc-500 inline-flex items-center gap-1">
-                <Search className="size-3" />
-                Search:
-              </span>
-              <a
-                href={searchUrl("zillow")}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                Zillow
-              </a>
-              <a
-                href={searchUrl("redfin")}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                Redfin
-              </a>
-              <a
-                href={searchUrl("google")}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                Google
-              </a>
-            </div>
-          ) : null}
+          {/* Always-rendered search row so it doesn't flicker in/out as
+              the user types. Links activate once the address is long
+              enough to plausibly match a listing. */}
+          {(() => {
+            const enabled = form.address.trim().length > 5;
+            const linkCls = enabled
+              ? "text-primary hover:underline"
+              : "text-zinc-400 dark:text-zinc-600 pointer-events-none";
+            return (
+              <div className="flex items-center gap-3 text-xs">
+                <span className="text-zinc-500 inline-flex items-center gap-1">
+                  <Search className="size-3" />
+                  Search listings:
+                </span>
+                <a
+                  href={enabled ? searchUrl("zillow") : "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={linkCls}
+                  aria-disabled={!enabled}
+                  tabIndex={enabled ? 0 : -1}
+                >
+                  Zillow
+                </a>
+                <a
+                  href={enabled ? searchUrl("redfin") : "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={linkCls}
+                  aria-disabled={!enabled}
+                  tabIndex={enabled ? 0 : -1}
+                >
+                  Redfin
+                </a>
+                <a
+                  href={enabled ? searchUrl("google") : "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={linkCls}
+                  aria-disabled={!enabled}
+                  tabIndex={enabled ? 0 : -1}
+                >
+                  Google
+                </a>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="space-y-1.5 sm:col-span-2">

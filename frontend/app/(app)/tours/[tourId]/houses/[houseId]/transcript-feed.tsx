@@ -49,7 +49,8 @@ export function TranscriptFeed({
   if (lines.length === 0) {
     return (
       <p className="text-sm text-zinc-500">
-        Waiting for the bot to start hearing audio…
+        Waiting for someone to speak — transcript lines will appear here as
+        the tour talks through the home.
       </p>
     );
   }

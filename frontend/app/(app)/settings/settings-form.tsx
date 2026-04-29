@@ -80,8 +80,11 @@ export function SettingsForm({ initial }: { initial: FormShape }) {
           inputMode="url"
         />
         <p className="text-xs text-zinc-500">
-          Used when you tap “Start tour”. Embed the passcode in the URL —
-          the bot can&apos;t enter passcodes manually.
+          We&apos;ll use this when you tap &ldquo;Start tour&rdquo; so you
+          don&apos;t have to paste it each time. If your meeting requires a
+          passcode, copy the full link Zoom gives you (it includes
+          <code className="mx-1 px-1 rounded bg-zinc-100 dark:bg-zinc-800 text-[10px]">?pwd=</code>
+          at the end) — our listener can&apos;t enter passcodes manually.
         </p>
       </div>
 

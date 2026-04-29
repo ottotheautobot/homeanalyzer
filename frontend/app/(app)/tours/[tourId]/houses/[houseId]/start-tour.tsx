@@ -73,10 +73,13 @@ export function StartTour({
                 <Users className="size-4.5" strokeWidth={2} />
               </span>
               <div className="min-w-0">
-                <div className="font-medium leading-tight">Multi-party</div>
+                <div className="font-medium leading-tight">
+                  Tour with someone watching live
+                </div>
                 <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-snug">
-                  Bot joins Zoom. Observations stream live to anyone watching
-                  remotely.
+                  A silent listener joins your Zoom call to capture the tour.
+                  Anyone you&apos;ve invited can follow along and see notes
+                  appear in real time.
                 </div>
               </div>
             </button>
@@ -110,7 +113,9 @@ export function StartTour({
                 placeholder="https://zoom.us/j/..."
               />
               <p className="text-xs text-zinc-500">
-                Bot will join silently as &ldquo;Tour Notes&rdquo;.
+                A silent participant named &ldquo;Tour Notes&rdquo; will appear
+                in the Zoom call — that&apos;s us listening to capture the tour.
+                You may need to admit it from the waiting room.
               </p>
             </div>
             {start.isError ? (

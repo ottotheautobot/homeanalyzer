@@ -122,7 +122,10 @@ export default async function HousePage({
               </span>
             ) : null}
             {house.tour_started_at ? (
-              <span className="text-xs text-zinc-500">
+              <time
+                className="text-xs text-zinc-500"
+                dateTime={house.tour_started_at}
+              >
                 Toured{" "}
                 {new Date(house.tour_started_at).toLocaleString("en-US", {
                   month: "short",
@@ -130,7 +133,7 @@ export default async function HousePage({
                   hour: "numeric",
                   minute: "2-digit",
                 })}
-              </span>
+              </time>
             ) : null}
           </div>
         </div>

@@ -159,7 +159,8 @@ export function ObservationFeed({
     return (
       <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-10 text-center">
         <p className="text-sm text-zinc-500">
-          No observations yet. They&apos;ll appear here as the bot hears the tour.
+          No observations yet. They&apos;ll start landing here within ~20s of
+          someone speaking on the tour. Snap a photo above to add one yourself.
         </p>
       </div>
     );

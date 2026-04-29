@@ -77,7 +77,7 @@ export function CompareForm({
         <div className="space-y-4">
           {grouped.map(({ tour, houses }) => (
             <div key={tour?.id ?? "unknown"}>
-              <div className="text-xs uppercase tracking-wide text-zinc-500 mb-2">
+              <div className="text-xs uppercase tracking-wide text-zinc-500 mb-2 truncate">
                 {tour?.name ?? "(unknown tour)"}
                 {tour?.location ? ` · ${tour.location}` : ""}
               </div>

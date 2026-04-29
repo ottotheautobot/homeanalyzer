@@ -19,7 +19,10 @@ export function RecordingPlayer({ houseId }: { houseId: string }) {
 
   if (isLoading) {
     return (
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 aspect-video animate-pulse" />
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 aspect-video animate-pulse flex items-center justify-center gap-2 text-sm text-zinc-500">
+        <Film className="size-4" />
+        Loading recording…
+      </div>
     );
   }
   if (isError || !data) {
