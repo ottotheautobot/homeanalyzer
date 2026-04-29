@@ -30,7 +30,32 @@ export async function callBackend<T = unknown>(
     let detail = "";
     try {
       const body = await res.json();
-      detail = body?.detail ?? JSON.stringify(body);
+      const raw = body?.detail;
+      if (typeof raw === "string") {
+        detail = raw;
+      } else if (Array.isArray(raw)) {
+        // FastAPI validation errors come back as
+        // [{loc: [...], msg: "...", type: "..."}, ...]. Surface the
+        // first useful msg with its path; previously we passed the
+        // whole array to BackendError which coerced to "[object Object]".
+        detail = raw
+          .map((e: unknown) => {
+            if (e && typeof e === "object") {
+              const obj = e as { loc?: unknown[]; msg?: string };
+              const loc = Array.isArray(obj.loc)
+                ? obj.loc.filter((p) => p !== "body").join(".")
+                : "";
+              const msg = obj.msg ?? JSON.stringify(e);
+              return loc ? `${loc}: ${msg}` : msg;
+            }
+            return String(e);
+          })
+          .join("; ");
+      } else if (raw && typeof raw === "object") {
+        detail = JSON.stringify(raw);
+      } else {
+        detail = JSON.stringify(body);
+      }
     } catch {
       detail = await res.text().catch(() => "");
     }
