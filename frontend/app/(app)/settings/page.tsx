@@ -1,14 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
+import type { Me } from "@/lib/types";
 
+import { SavedLocationsForm } from "./saved-locations";
 import { SettingsForm } from "./settings-form";
-
-type Me = {
-  id: string;
-  email: string;
-  name: string | null;
-  default_zoom_url: string | null;
-};
 
 export default async function SettingsPage() {
   const me = await serverFetch<Me>("/me");
@@ -33,6 +28,15 @@ export default async function SettingsPage() {
               default_zoom_url: me.default_zoom_url ?? "",
             }}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Saved locations</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SavedLocationsForm initial={me.saved_locations ?? []} />
         </CardContent>
       </Card>
     </div>

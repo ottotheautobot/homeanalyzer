@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     modal_token_id: str = ""
     modal_token_secret: str = ""
 
+    # Mapbox Directions Matrix API — used to compute drive-time commute
+    # estimates from each house to each of the user's saved locations
+    # (work, kids' school, etc.). Empty = falls back to as-the-crow-flies
+    # haversine distance with no time estimate. Free tier: 100k matrix
+    # requests/month, each request up to 25x25 origins-destinations.
+    mapbox_api_token: str = ""
+
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.
     resend_api_key: str = ""

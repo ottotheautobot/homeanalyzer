@@ -10,6 +10,9 @@ Version names are marketing-style for now (`v1.6`, `v2.0`, etc.) and reflect the
 
 Customer-discovery phase — see `CONTEXT.md`. No major feature work planned for ~4 weeks. Smaller items still ship as observation surfaces friction worth fixing.
 
+### Added
+- **Saved locations + commute distances on the map.** A buyer-side anchors feature: pin work, kids' school, gym, etc. in Settings, and every house on the `/map` page shows distance/time from that house to each saved location. Mapbox Directions Matrix when `MAPBOX_API_TOKEN` is set (real drive time + drive distance), as-the-crow-flies haversine fallback otherwise so the feature degrades gracefully without infra. Migration `0017_saved_locations.sql` adds `users.saved_locations` (jsonb) + `houses.commute_distances` (jsonb cache). Distances recompute in the background when saved locations change or a house's geocode changes. Direct response to mom-as-agent's primary buyer question ("how far is this from work / school?"), and a discovery instrument: if she doesn't use the feature, that tells us something cheap.
+
 ## v2.7 — Drop the visual floor plan, surface room list — 2026-04-29
 
 ### Removed

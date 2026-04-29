@@ -1,8 +1,11 @@
 "use client";
 
+import { Briefcase, Dumbbell, GraduationCap, Heart, MapPin } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Map, Overlay, ZoomControl } from "pigeon-maps";
+
+import type { CommuteEntry, SavedLocation } from "@/lib/types";
 
 import type { HouseMapPin } from "./page";
 
@@ -58,22 +61,65 @@ function statusLabel(status: string): string {
   }
 }
 
-export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
-  const [selected, setSelected] = useState<string | null>(null);
+function kindIcon(kind: SavedLocation["kind"]) {
+  const cls = "size-3.5";
+  switch (kind) {
+    case "work":
+      return <Briefcase className={cls} strokeWidth={2.4} />;
+    case "school":
+      return <GraduationCap className={cls} strokeWidth={2.4} />;
+    case "gym":
+      return <Dumbbell className={cls} strokeWidth={2.4} />;
+    case "family":
+      return <Heart className={cls} strokeWidth={2.4} />;
+    default:
+      return <MapPin className={cls} strokeWidth={2.4} />;
+  }
+}
+
+function formatCommute(entry: CommuteEntry): string {
+  if (entry.minutes != null) {
+    const m = Math.round(entry.minutes);
+    return `${m} min · ${entry.miles} mi`;
+  }
+  // Haversine fallback — straight-line, no ETA.
+  return `~${entry.miles} mi as the crow flies`;
+}
+
+export function HousesMap({
+  pins,
+  savedLocations,
+}: {
+  pins: HouseMapPin[];
+  savedLocations: SavedLocation[];
+}) {
+  const [selectedHouse, setSelectedHouse] = useState<string | null>(null);
+  const [selectedSaved, setSelectedSaved] = useState<string | null>(null);
+
+  // Center + zoom: include both house pins and saved locations so the
+  // initial framing is something useful even if the user's saved
+  // locations sit outside the cluster of house markers.
+  const allPoints = useMemo(
+    () =>
+      [
+        ...pins.map((p) => ({ lat: p.latitude, lng: p.longitude })),
+        ...savedLocations.map((s) => ({ lat: s.lat, lng: s.lng })),
+      ],
+    [pins, savedLocations],
+  );
 
   const center = useMemo<[number, number]>(() => {
-    const lats = pins.map((p) => p.latitude);
-    const lngs = pins.map((p) => p.longitude);
+    if (!allPoints.length) return [0, 0];
     return [
-      lats.reduce((a, b) => a + b, 0) / lats.length,
-      lngs.reduce((a, b) => a + b, 0) / lngs.length,
+      allPoints.reduce((s, p) => s + p.lat, 0) / allPoints.length,
+      allPoints.reduce((s, p) => s + p.lng, 0) / allPoints.length,
     ];
-  }, [pins]);
+  }, [allPoints]);
 
   const zoom = useMemo(() => {
-    if (pins.length <= 1) return 13;
-    const lats = pins.map((p) => p.latitude);
-    const lngs = pins.map((p) => p.longitude);
+    if (allPoints.length <= 1) return 13;
+    const lats = allPoints.map((p) => p.lat);
+    const lngs = allPoints.map((p) => p.lng);
     const span = Math.max(
       Math.max(...lats) - Math.min(...lats),
       Math.max(...lngs) - Math.min(...lngs),
@@ -83,9 +129,16 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
     if (span > 0.5) return 9;
     if (span > 0.1) return 11;
     return 13;
-  }, [pins]);
+  }, [allPoints]);
 
-  const selectedPin = pins.find((p) => p.id === selected);
+  const selectedPin = pins.find((p) => p.id === selectedHouse);
+  const selectedSavedPin = savedLocations.find((s) => s.id === selectedSaved);
+  const savedById = useMemo(() => {
+    // Use a plain object — `Map` is shadowed by pigeon-maps' Map import.
+    const m: Record<string, SavedLocation> = {};
+    for (const s of savedLocations) m[s.id] = s;
+    return m;
+  }, [savedLocations]);
 
   return (
     <div className="space-y-3">
@@ -99,11 +152,49 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
           attribution={ATTRIBUTION}
         >
           <ZoomControl />
+
+          {/* Saved-location pins: distinct shape (square) and color so
+              they don't visually compete with score-colored house pins. */}
+          {savedLocations.map((s) => {
+            const isSelected = s.id === selectedSaved;
+            return (
+              <Overlay
+                key={`saved-${s.id}`}
+                anchor={[s.lat, s.lng]}
+                offset={[14, 14]}
+              >
+                <button
+                  type="button"
+                  aria-label={s.label}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedHouse(null);
+                    setSelectedSaved(isSelected ? null : s.id);
+                  }}
+                  onTouchEnd={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedHouse(null);
+                    setSelectedSaved(isSelected ? null : s.id);
+                  }}
+                  className="block rounded-md border-2 border-white dark:border-zinc-100 shadow-md transition-transform active:scale-95 inline-flex items-center justify-center text-white"
+                  style={{
+                    backgroundColor: "#6366f1", // indigo-500 — clearly distinct from house score colors
+                    width: isSelected ? 32 : 26,
+                    height: isSelected ? 32 : 26,
+                    boxShadow: isSelected
+                      ? "0 0 0 3px rgba(99, 102, 241, 0.45)"
+                      : "0 1px 3px rgba(0, 0, 0, 0.3)",
+                  }}
+                >
+                  {kindIcon(s.kind)}
+                </button>
+              </Overlay>
+            );
+          })}
+
           {pins.map((p) => {
-            const isSelected = p.id === selected;
-            // Overlay with an explicit button instead of the default
-            // <Marker>: bigger tap target and stopPropagation so the map's
-            // pan/drag gesture can't eat the touch event on mobile.
+            const isSelected = p.id === selectedHouse;
             return (
               <Overlay
                 key={p.id}
@@ -115,15 +206,14 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
                   aria-label={p.address}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelected(isSelected ? null : p.id);
+                    setSelectedSaved(null);
+                    setSelectedHouse(isSelected ? null : p.id);
                   }}
                   onTouchEnd={(e) => {
-                    // iOS Safari sometimes misses synthetic clicks after a
-                    // brief tap — handle the touch directly. preventDefault
-                    // stops the synthesized click from double-firing.
                     e.preventDefault();
                     e.stopPropagation();
-                    setSelected(isSelected ? null : p.id);
+                    setSelectedSaved(null);
+                    setSelectedHouse(isSelected ? null : p.id);
                   }}
                   className="block rounded-full border-2 border-white dark:border-zinc-100 shadow-md transition-transform active:scale-95"
                   style={{
@@ -162,19 +252,76 @@ export function HousesMap({ pins }: { pins: HouseMapPin[] }) {
                   ? ` · score ${selectedPin.overall_score.toFixed(1)}`
                   : ""}
               </p>
+              {selectedPin.commute_distances &&
+              Object.keys(selectedPin.commute_distances).length > 0 ? (
+                <ul className="mt-2 space-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+                  {Object.entries(selectedPin.commute_distances)
+                    .map(([sid, entry]) => ({
+                      saved: savedById[sid],
+                      entry,
+                    }))
+                    .filter((row) => row.saved)
+                    .sort(
+                      (a, b) =>
+                        (a.entry.miles ?? Infinity) -
+                        (b.entry.miles ?? Infinity),
+                    )
+                    .map(({ saved, entry }) => (
+                      <li key={saved!.id} className="flex items-center gap-1.5">
+                        <span className="text-zinc-400 inline-flex">
+                          {kindIcon(saved!.kind)}
+                        </span>
+                        <span>
+                          {formatCommute(entry)} from{" "}
+                          <span className="text-zinc-700 dark:text-zinc-300">
+                            {saved!.label}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                </ul>
+              ) : savedLocations.length > 0 ? (
+                <p className="text-xs text-zinc-400 mt-2 italic">
+                  Computing distances to your saved locations…
+                </p>
+              ) : null}
               <Link
                 href={`/tours/${selectedPin.tour_id}/houses/${selectedPin.id}`}
-                className="text-xs text-primary hover:underline mt-1 inline-block"
+                className="text-xs text-primary hover:underline mt-2 inline-block"
               >
                 Open brief →
               </Link>
             </div>
           </div>
         </div>
+      ) : selectedSavedPin ? (
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3">
+          <div className="flex items-start gap-3">
+            <span className="shrink-0 inline-flex items-center justify-center size-9 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+              {kindIcon(selectedSavedPin.kind)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium leading-tight">
+                {selectedSavedPin.label}
+              </p>
+              {selectedSavedPin.address ? (
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {selectedSavedPin.address}
+                </p>
+              ) : null}
+              <Link
+                href="/settings"
+                className="text-xs text-primary hover:underline mt-1 inline-block"
+              >
+                Edit in Settings →
+              </Link>
+            </div>
+          </div>
+        </div>
       ) : (
         <p className="text-xs text-zinc-500 text-center">
-          Tap a marker. Marker color = overall score (red &lt; 4, amber &lt; 6,
-          green ≥ 6, emerald ≥ 8).
+          Tap a marker. Round = house (color = score). Square = your saved
+          locations (work, school, etc.). Pin one in Settings.
         </p>
       )}
     </div>

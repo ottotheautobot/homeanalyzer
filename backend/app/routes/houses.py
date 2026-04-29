@@ -169,6 +169,21 @@ def list_all_houses(
     return [_to_house_out(h) for h in res.data or []]
 
 
+class CommuteEntry(BaseModel):
+    miles: float
+    minutes: float | None  # null when fell back to haversine
+    mode: str  # "driving" | "haversine"
+
+
+class SavedLocationPin(BaseModel):
+    id: str
+    label: str
+    address: str | None
+    lat: float
+    lng: float
+    kind: str
+
+
 class HouseMapPin(BaseModel):
     id: str
     tour_id: str
@@ -178,12 +193,16 @@ class HouseMapPin(BaseModel):
     overall_score: float | None
     status: str
     photo_signed_url: str | None
+    # Map of saved-location-id -> commute entry. Empty / null when the
+    # user has no saved locations or commute_distances is uncomputed.
+    commute_distances: dict[str, CommuteEntry] | None = None
 
 
 class HouseMapResponse(BaseModel):
     pins: list[HouseMapPin]
     total_houses: int
     pending_geocode: int
+    saved_locations: list[SavedLocationPin]
 
 
 # Hard cap on synchronous geocoding per request — Nominatim is rate-limited
@@ -191,11 +210,14 @@ class HouseMapResponse(BaseModel):
 _MAX_SYNC_GEOCODE = 2
 
 
-def _geocode_house(house_id: str, address: str) -> None:
-    """Background-task entry point: geocode one house and persist the result."""
+def _geocode_house(house_id: str, address: str, user_id: str | None = None) -> None:
+    """Background-task entry point: geocode one house and persist the result.
+    When user_id is supplied and geocode succeeded, also recomputes that
+    house's commute_distances against the user's saved locations."""
     from datetime import datetime, timezone
 
     from app.services.geocode import geocode_address
+    from app.services import routing
 
     coords = geocode_address(address)
     sb = supabase()
@@ -204,6 +226,13 @@ def _geocode_house(house_id: str, address: str) -> None:
         sb.table("houses").update(
             {"latitude": coords[0], "longitude": coords[1], "geocoded_at": now}
         ).eq("id", house_id).execute()
+        if user_id:
+            try:
+                routing.recompute_for_house(house_id, user_id)
+            except Exception:
+                log.exception(
+                    "commute recompute after geocode failed house=%s", house_id
+                )
     else:
         # Mark attempted so we don't retry on every refresh.
         sb.table("houses").update({"geocoded_at": now}).eq(
@@ -256,6 +285,32 @@ def list_houses_for_map(
     from app.services.geocode import geocode_address
 
     sb = supabase()
+
+    # Pull the user's saved locations once — they ride along in the
+    # response so the map page can render pins + per-house commute lines
+    # without a second round trip.
+    user_row = (
+        sb.table("users")
+        .select("saved_locations")
+        .eq("id", user.id)
+        .limit(1)
+        .execute()
+    )
+    raw_saved = (user_row.data[0] if user_row.data else {}).get("saved_locations") or []
+    from app.services import routing as _routing
+
+    saved_locations = [
+        SavedLocationPin(
+            id=loc["id"],
+            label=loc["label"],
+            address=loc.get("address"),
+            lat=float(loc["lat"]),
+            lng=float(loc["lng"]),
+            kind=loc.get("kind") or "other",
+        )
+        for loc in _routing.iter_locations(raw_saved)
+    ]
+
     tp = (
         sb.table("tour_participants")
         .select("tour_id")
@@ -264,12 +319,14 @@ def list_houses_for_map(
     )
     tour_ids = [r["tour_id"] for r in (tp.data or [])]
     if not tour_ids:
-        return HouseMapResponse(pins=[], total_houses=0, pending_geocode=0)
+        return HouseMapResponse(
+            pins=[], total_houses=0, pending_geocode=0, saved_locations=saved_locations
+        )
     res = (
         sb.table("houses")
         .select(
             "id, tour_id, address, latitude, longitude, geocoded_at, "
-            "overall_score, status, photo_url"
+            "overall_score, status, photo_url, commute_distances"
         )
         .in_("tour_id", tour_ids)
         .execute()
@@ -303,6 +360,13 @@ def list_houses_for_map(
                             "geocoded_at": now,
                         }
                     ).eq("id", h["id"]).execute()
+                    # Compute commute distances for the just-geocoded
+                    # house against the user's saved locations, in the
+                    # background so the response stays fast.
+                    if saved_locations:
+                        background.add_task(
+                            _routing.recompute_for_house, h["id"], user.id
+                        )
                 else:
                     sb.table("houses").update({"geocoded_at": now}).eq(
                         "id", h["id"]
@@ -310,7 +374,10 @@ def list_houses_for_map(
             else:
                 # Past sync budget — push to background, returns next refresh.
                 background.add_task(
-                    _geocode_house, house_id=h["id"], address=h["address"]
+                    _geocode_house,
+                    house_id=h["id"],
+                    address=h["address"],
+                    user_id=user.id,
                 )
                 pending += 1
         if lat is None or lng is None:
@@ -325,10 +392,14 @@ def list_houses_for_map(
                 overall_score=h.get("overall_score"),
                 status=h.get("status") or "upcoming",
                 photo_signed_url=_sign_photo(h.get("photo_url")),
+                commute_distances=h.get("commute_distances") or None,
             )
         )
     return HouseMapResponse(
-        pins=pins, total_houses=len(rows), pending_geocode=pending
+        pins=pins,
+        total_houses=len(rows),
+        pending_geocode=pending,
+        saved_locations=saved_locations,
     )
 
 

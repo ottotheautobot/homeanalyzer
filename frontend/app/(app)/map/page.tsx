@@ -1,6 +1,7 @@
 import { RefreshOnVisibility } from "@/components/refresh-on-visibility";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
+import type { CommuteEntry, SavedLocation } from "@/lib/types";
 
 import { HousesMap } from "./houses-map";
 import { RegeocodeButton } from "./regeocode-button";
@@ -14,12 +15,14 @@ export type HouseMapPin = {
   overall_score: number | null;
   status: string;
   photo_signed_url: string | null;
+  commute_distances: Record<string, CommuteEntry> | null;
 };
 
 type HouseMapResponse = {
   pins: HouseMapPin[];
   total_houses: number;
   pending_geocode: number;
+  saved_locations: SavedLocation[];
 };
 
 export default async function MapPage() {
@@ -27,7 +30,7 @@ export default async function MapPage() {
   // pushes the rest into background tasks; we refresh on visibility so the
   // map fills in without a hard reload.
   const data = await serverFetch<HouseMapResponse>("/houses/map");
-  const { pins, total_houses, pending_geocode } = data;
+  const { pins, total_houses, pending_geocode, saved_locations } = data;
 
   if (total_houses === 0) {
     return (
@@ -102,7 +105,7 @@ export default async function MapPage() {
         </div>
         <RegeocodeButton />
       </div>
-      <HousesMap pins={pins} />
+      <HousesMap pins={pins} savedLocations={saved_locations ?? []} />
     </div>
   );
 }

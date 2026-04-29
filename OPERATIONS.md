@@ -51,6 +51,14 @@ General App with **Meeting SDK** + **Programmatic Join** features both toggled o
 |---|---|
 | API key | Railway env `DEEPGRAM_API_KEY` |
 
+## Mapbox (commute distances on /map)
+
+Optional. When set, the saved-locations feature uses Mapbox's Directions Matrix API for real drive time + distance. When unset, the feature falls back to as-the-crow-flies haversine miles with no time estimate — feature still works, just less precise.
+
+| Credential | Where | Notes |
+|---|---|---|
+| API token | Railway env `MAPBOX_API_TOKEN` | Free tier: 100k matrix requests/month, each up to 25×25 origins-destinations. Generate at account.mapbox.com → Tokens. A default public token (`pk.…`) is fine; we only use the Directions Matrix scope. |
+
 ## Resend (transactional email)
 
 Used for "tour starting on this house" notifications to tour participants.

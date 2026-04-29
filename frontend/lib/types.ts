@@ -16,11 +16,28 @@ export type TourSummary = Tour & {
   last_activity_at: string | null;
 };
 
+export type SavedLocation = {
+  id: string;
+  label: string;
+  address: string | null;
+  lat: number;
+  lng: number;
+  kind: "work" | "school" | "gym" | "family" | "other";
+};
+
 export type Me = {
   id: string;
   email: string;
   name: string | null;
   default_zoom_url: string | null;
+  saved_locations: SavedLocation[];
+};
+
+export type CommuteEntry = {
+  miles: number;
+  /** null when fell back to as-the-crow-flies haversine. */
+  minutes: number | null;
+  mode: "driving" | "haversine";
 };
 
 export type TourInvite = {
