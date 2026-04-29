@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
+import { clientFetch } from "@/lib/api-client";
 
 /** A single resolved address suggestion. The display string is what the
  *  user sees and what gets persisted; lat/lng come along so callers can
@@ -14,41 +15,6 @@ export type AddressSuggestion = {
   lng: number;
 };
 
-type PhotonProperties = {
-  name?: string;
-  housenumber?: string;
-  street?: string;
-  city?: string;
-  district?: string;
-  county?: string;
-  state?: string;
-  country?: string;
-  postcode?: string;
-};
-
-type PhotonFeature = {
-  geometry: { coordinates: [number, number] }; // [lng, lat]
-  properties: PhotonProperties;
-};
-
-type PhotonResponse = {
-  features: PhotonFeature[];
-};
-
-function formatAddress(p: PhotonProperties): string {
-  // Build a human-readable line. Prefer house# + street; fall back to
-  // name (e.g. business name) when there's no street number.
-  const street = [p.housenumber, p.street].filter(Boolean).join(" ");
-  const localityParts = [p.city || p.district, p.state, p.postcode].filter(Boolean);
-  const head = street || p.name || "";
-  if (head && localityParts.length) {
-    return `${head}, ${localityParts.join(", ")}`;
-  }
-  if (head) return head;
-  return localityParts.join(", ");
-}
-
-const PHOTON_URL = "https://photon.komoot.io/api/";
 const DEBOUNCE_MS = 300;
 const MIN_QUERY_LEN = 3;
 
@@ -122,25 +88,15 @@ export function AddressAutocomplete({
       abortRef.current = controller;
       setLoading(true);
       try {
-        const url = new URL(PHOTON_URL);
-        url.searchParams.set("q", q);
-        url.searchParams.set("limit", "5");
-        const r = await fetch(url.toString(), { signal: controller.signal });
-        if (!r.ok) {
-          setSuggestions([]);
-          return;
-        }
-        const data = (await r.json()) as PhotonResponse;
-        const out: AddressSuggestion[] = [];
-        for (const f of data.features ?? []) {
-          if (!f.geometry?.coordinates) continue;
-          const [lng, lat] = f.geometry.coordinates;
-          const formatted = formatAddress(f.properties ?? {});
-          if (!formatted) continue;
-          out.push({ address: formatted, lat, lng });
-        }
-        setSuggestions(out);
-        setOpen(out.length > 0);
+        // Backend proxy: ORS Pelias preferred (much better US
+        // residential coverage), Photon fallback. Single endpoint
+        // regardless of provider chain.
+        const data = await clientFetch<AddressSuggestion[]>(
+          `/geocode/autocomplete?q=${encodeURIComponent(q)}`,
+          { signal: controller.signal },
+        );
+        setSuggestions(data);
+        setOpen(data.length > 0);
         setActive(-1);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {

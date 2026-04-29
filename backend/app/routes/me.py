@@ -5,7 +5,7 @@ from uuid import uuid4
 from app.db.supabase import supabase
 from app.deps import AuthUser, current_user
 from app.services import routing
-from app.services.geocode import geocode_address
+from app.services.geocode import autocomplete_addresses, geocode_address
 
 router = APIRouter(tags=["me"])
 
@@ -160,3 +160,26 @@ def new_location_id(_: AuthUser = Depends(current_user)) -> dict:
     """Mint a fresh UUID for a new saved-location entry. Server-side so
     the client doesn't depend on a uuid lib for one-off id generation."""
     return {"id": str(uuid4())}
+
+
+class AutocompleteSuggestion(BaseModel):
+    address: str
+    lat: float
+    lng: float
+
+
+@router.get("/geocode/autocomplete", response_model=list[AutocompleteSuggestion])
+def geocode_autocomplete(
+    q: str,
+    _: AuthUser = Depends(current_user),
+) -> list[AutocompleteSuggestion]:
+    """Server-side proxy for address autocomplete. Tries ORS Pelias first
+    (much better US residential coverage), falls back to Photon. Used
+    by every <AddressAutocomplete> in the app."""
+    results = autocomplete_addresses(q, limit=5)
+    return [
+        AutocompleteSuggestion(
+            address=r["address"], lat=float(r["lat"]), lng=float(r["lng"])
+        )
+        for r in results
+    ]
