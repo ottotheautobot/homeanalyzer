@@ -10,8 +10,26 @@ Version names are marketing-style for now (`v1.6`, `v2.0`, etc.) and reflect the
 
 Customer-discovery phase — see `CONTEXT.md`. No major feature work planned for ~4 weeks. Smaller items still ship as observation surfaces friction worth fixing.
 
-### Added
-- `POST /houses/{id}/video` + `Upload video` button in the Solo-mode start-tour modal. Recovers tours where the live multi-party path didn't capture (no signal, app failure, etc.) by running the full post-meeting pipeline against an uploaded camera-roll video: vision over frames → Whisper transcription of extracted audio → observations → synthesis → schematic floor plan → measured floor plan (Modal, gated). Doubles as the empirical input for the open "does clear video materially improve analysis output" question on the post-Zoom architecture decision.
+## v2.7 — Drop the visual floor plan, surface room list — 2026-04-29
+
+### Removed
+- **Visual measured-floor-plan rendering** (the SVG layout that v1.6 → v2.5 attempted). The camera-cluster segmentation primitive is the structural ceiling — validated against a locally-recorded 4-min tour upload (Lakeside Terrace) that produced the same 1-2 oversized "rooms" pattern as Zoom-passed-through tours, despite materially better video quality and 46-vertex polygon detail. Until in-app capture lets us influence camera flow / direction, the visual output is net-misleading vs informative.
+- `frontend/lib/floor-plan-merge.ts` — the schematic+measured union layer. No longer needed.
+- `frontend/app/(app)/tours/[tourId]/houses/[houseId]/measured-floor-plan.tsx` — the "Re-measure from video" controls + pending/failed states.
+- `backend/app/routes/measured_floorplan.py` — `/houses/{id}/measure-floorplan`, `/poll`, `/cancel`, `/status` endpoints.
+- Auto-trigger of the Modal floor-plan job in `webhooks._finalize_inner` and `video._process_video_upload_from_path`.
+- `MeasuredFloorPlan*` types from `frontend/lib/types.ts` and the `measured_floor_plan_*` fields from the `House` type.
+
+### Changed
+- **Layout card → Rooms card.** Replaces the SVG visual with a card-grid of room name + dimensions (W×D′) + sq ft + per-room features. Total square footage summed at the top with a "dimensions are LLM estimates from the tour transcript" caveat. Still driven by the schematic LLM that's been producing this data all along — we were just hiding it behind a flashier-but-broken visual.
+
+### Inert (kept for potential future use)
+- `model_apps/floor_plan.py` Modal worker code stays in the repo but is no longer deployed or invoked. Preserves the work for the day in-app capture validates revisiting visual floor plans.
+- `houses.measured_floor_plan_*` columns remain on the schema for archival of pre-v2.7 runs. No migration drop.
+- `ENABLE_MEASURED_FLOORPLAN`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` Railway env vars become inert; remove at your leisure.
+
+### Added (Unreleased work that landed alongside)
+- `POST /houses/{id}/video/upload-url` + `POST /houses/{id}/video/process` — two-step signed-URL upload flow for tour videos recorded outside the app (no signal / app failure recovery). Uploads bypass Railway's request-body cap by going browser → Supabase Storage directly; backend stream-downloads to a temp file on disk to avoid OOM. Pipeline runs vision over frames → Whisper transcription of extracted audio → observations → synthesis → schematic floor plan. Doubles as the empirical input for the open "does clear video materially improve analysis output" question on the post-Zoom architecture decision (validated partially: vision density and polygon fidelity improve; segmentation primitive remains the bottleneck — hence v2.7's prune).
 
 ---
 

@@ -26,7 +26,6 @@ import os
 import subprocess
 import tempfile
 import time
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
@@ -230,62 +229,14 @@ def _process_video_upload_from_path(
                 except Exception:
                     pass
 
-        # Measured floor plan: same gating as the webhook flow.
-        skip_reasons = []
-        if not settings.enable_measured_floorplan:
-            skip_reasons.append("ENABLE_MEASURED_FLOORPLAN=false")
-        if (duration or 0) < 30:
-            skip_reasons.append(f"duration={duration} < 30s")
-        if skip_reasons:
-            log.warning(
-                "video upload: measured floor plan SKIPPED house=%s: %s",
-                house_id,
-                "; ".join(skip_reasons),
-            )
-            return
-
-        try:
-            from app.routes.measured_floorplan import spawn_modal_job
-
-            fresh = (
-                sb.table("houses")
-                .select("floor_plan_json")
-                .eq("id", house_id)
-                .single()
-                .execute()
-            )
-            schematic = (fresh.data or {}).get("floor_plan_json")
-
-            sb.table("houses").update(
-                {
-                    "measured_floor_plan_status": "pending",
-                    "measured_floor_plan_error": None,
-                    "measured_floor_plan_started_at": datetime.now(
-                        timezone.utc
-                    ).isoformat(),
-                    "measured_floor_plan_modal_call_id": None,
-                }
-            ).eq("id", house_id).execute()
-
-            call_id = spawn_modal_job(
-                house_id=house_id,
-                video_storage_path=video_storage_path,
-                schematic=schematic,
-            )
-            if call_id:
-                sb.table("houses").update(
-                    {"measured_floor_plan_modal_call_id": call_id}
-                ).eq("id", house_id).execute()
-                log.info(
-                    "video upload spawned measured floor plan house=%s call=%s",
-                    house_id,
-                    call_id,
-                )
-        except Exception as e:
-            log.exception(
-                "video upload: measured floor plan spawn crashed house=%s", house_id
-            )
-            sentry_sdk.capture_exception(e)
+        # Measured floor plan removed in v2.7 — see CHANGELOG. The
+        # video bytes still feed the vision pipeline above, but we no
+        # longer spawn the Modal floor-plan job.
+        log.info(
+            "video upload pipeline complete house=%s video_storage_path=%s",
+            house_id,
+            video_storage_path,
+        )
     finally:
         try:
             os.unlink(video_path)

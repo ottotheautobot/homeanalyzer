@@ -9,7 +9,6 @@ Hours 3-8.
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
@@ -379,80 +378,13 @@ def run_post_meeting_pipeline(house: dict, completion) -> None:
     log.info("_finalize running whisper pipeline bot=%s", bot_id)
     _process_audio_upload(house_id, audio_bytes, "audio/wav", "wav")
 
-    # Measured floor plan: fire-and-forget on Modal if the feature is on and
-    # we have a video to feed it. Blocking would keep the webhook handler
-    # busy for ~5 min; instead we schedule the same background task that the
-    # manual button triggers via the measured_floorplan route.
-    #
-    # Surface every gate explicitly — silent skip on a misconfigured local
-    # env once cost us 5 floor plans we had to backfill manually.
-    skip_reasons = []
-    if not settings.enable_measured_floorplan:
-        skip_reasons.append("ENABLE_MEASURED_FLOORPLAN=false")
-    if not update.get("video_url"):
-        skip_reasons.append("no video_url (upload likely failed)")
-    if (update.get("video_duration_seconds") or 0) < 30:
-        skip_reasons.append(
-            f"duration={update.get('video_duration_seconds')} < 30s"
-        )
-    if skip_reasons:
-        log.warning(
-            "auto-trigger SKIPPED for measured floor plan house=%s: %s",
-            house_id,
-            "; ".join(skip_reasons),
-        )
-    if (
-        settings.enable_measured_floorplan
-        and update.get("video_url")
-        and update.get("video_duration_seconds", 0) >= 30
-    ):
-        try:
-            from app.routes.measured_floorplan import spawn_modal_job
-
-            # Re-read the schematic from DB — synthesis just wrote it.
-            fresh = (
-                sb.table("houses")
-                .select("floor_plan_json,video_url")
-                .eq("id", house_id)
-                .single()
-                .execute()
-            )
-            schematic = (fresh.data or {}).get("floor_plan_json")
-
-            sb.table("houses").update(
-                {
-                    "measured_floor_plan_status": "pending",
-                    "measured_floor_plan_error": None,
-                    "measured_floor_plan_started_at": datetime.now(
-                        timezone.utc
-                    ).isoformat(),
-                    "measured_floor_plan_modal_call_id": None,
-                }
-            ).eq("id", house_id).execute()
-
-            # Modal.spawn() returns immediately with a FunctionCall id we
-            # persist on the row. The frontend polls measure-floorplan-poll
-            # to retrieve the result — no daemon thread needed, so a Railway
-            # worker restart doesn't lose the job.
-            call_id = spawn_modal_job(
-                house_id=house_id,
-                video_storage_path=update["video_url"],
-                schematic=schematic,
-            )
-            if call_id:
-                sb.table("houses").update(
-                    {"measured_floor_plan_modal_call_id": call_id}
-                ).eq("id", house_id).execute()
-                log.info(
-                    "_finalize spawned measured floor-plan house=%s call_id=%s "
-                    "(schematic_rooms=%d)",
-                    house_id,
-                    call_id,
-                    len((schematic or {}).get("rooms") or []),
-                )
-        except Exception as e:
-            log.exception("failed to spawn measured floor-plan job house=%s", house_id)
-            sentry_sdk.capture_exception(e)
+    # Measured floor plan: removed in v2.7. The visual floor-plan
+    # output was unreliable (camera-cluster segmentation primitive is
+    # the structural ceiling, see CHANGELOG and BACKLOG). The schematic
+    # LLM-derived room list + dimensions is what we surface now. Once
+    # in-app capture lands and we can influence camera flow / direction,
+    # we'll revisit a CubiCasa-tier visual floor plan as a real
+    # differentiator.
 
     state.drop(bot_id)
 

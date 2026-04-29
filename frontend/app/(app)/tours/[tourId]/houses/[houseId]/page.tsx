@@ -6,13 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverFetch } from "@/lib/api-server";
 import type { House, Observation, Tour, Transcript } from "@/lib/types";
 
-import { mergeFloorPlans } from "@/lib/floor-plan-merge";
-
 import { FloorPlanView } from "./floor-plan";
 import { LiveTour } from "./live-tour";
-import {
-  MeasuredFloorPlanControls,
-} from "./measured-floor-plan";
 import { ObservationFeed } from "./observation-feed";
 import { PhotoNoteButton } from "./photo-note";
 import { PhotoThumbnail } from "./photo-thumbnail";
@@ -195,40 +190,10 @@ export default async function HousePage({
       {house.status === "completed" ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Layout</CardTitle>
+            <CardTitle className="text-base">Rooms</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {(() => {
-              const measuredReady =
-                house.measured_floor_plan_json &&
-                house.measured_floor_plan_status === "ready" &&
-                house.measured_floor_plan_json.rooms?.length;
-              // True union: schematic's room list is canonical, measured
-              // overrides dimensions where labels match, vision-only rooms
-              // get appended. Each room carries a `source` tag so the
-              // renderer can show which numbers came from where.
-              const merged = mergeFloorPlans(
-                measuredReady ? house.measured_floor_plan_json : null,
-                house.floor_plan_json,
-              );
-              if (merged && merged.rooms.length > 0) {
-                return (
-                  <FloorPlanView
-                    plan={merged}
-                    source={measuredReady ? "measured" : "schematic"}
-                  />
-                );
-              }
-              return (
-                <p className="text-sm text-zinc-500">
-                  Generating layout from this tour&apos;s transcript and
-                  observations…
-                </p>
-              );
-            })()}
-            {house.video_url ? (
-              <MeasuredFloorPlanControls house={house} />
-            ) : null}
+          <CardContent>
+            <FloorPlanView plan={house.floor_plan_json} />
           </CardContent>
         </Card>
       ) : null}
