@@ -51,13 +51,14 @@ General App with **Meeting SDK** + **Programmatic Join** features both toggled o
 |---|---|
 | API key | Railway env `DEEPGRAM_API_KEY` |
 
-## Mapbox (commute distances on /map)
+## Routing API (commute distances on /map)
 
-Optional. When set, the saved-locations feature uses Mapbox's Directions Matrix API for real drive time + distance. When unset, the feature falls back to as-the-crow-flies haversine miles with no time estimate — feature still works, just less precise.
+Optional. Either provider gives the saved-locations feature real drive time + distance. With neither configured, the feature falls back to as-the-crow-flies haversine miles with no time estimate — still functional, just less precise. Backend tries ORS first, then Mapbox, then haversine.
 
-| Credential | Where | Notes |
-|---|---|---|
-| API token | Railway env `MAPBOX_API_TOKEN` | Free tier: 100k matrix requests/month, each up to 25×25 origins-destinations. Generate at account.mapbox.com → Tokens. A default public token (`pk.…`) is fine; we only use the Directions Matrix scope. |
+| Provider | Credential | Where | Notes |
+|---|---|---|---|
+| OpenRouteService | API token | Railway env `OPENROUTESERVICE_API_TOKEN` | Free tier: 2000 matrix requests/day, no card. Signup at openrouteservice.org/dev → "Sign up". Preferred — easier signup than Mapbox. |
+| Mapbox | API token | Railway env `MAPBOX_API_TOKEN` | Free tier: 100k matrix requests/month, each up to 25×25 origins-destinations. Generate at account.mapbox.com → Tokens. A default public token (`pk.…`) is fine; we only use the Directions Matrix scope. (Their signup form sometimes hits captcha glitches; ORS is the workaround.) |
 
 ## Resend (transactional email)
 
