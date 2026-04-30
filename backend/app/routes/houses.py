@@ -112,15 +112,14 @@ def get_house_for_user(house_id: str, user_id: str) -> dict:
 
 
 def _sign_photo(path: str | None) -> str | None:
+    """Resilient signed-download URL for the curb-appeal photo. Goes
+    via app.services.storage which bypasses storage3's HTTP/2 client
+    (the source of the recurring `Server disconnected` errors)."""
     if not path:
         return None
-    try:
-        res = supabase().storage.from_("tour-audio").create_signed_url(path, 3600)
-        return res.get("signedURL") or res.get("signedUrl")
-    except Exception as e:
-        log.exception("photo sign failed for %s", path)
-        sentry_sdk.capture_exception(e)
-        return None
+    from app.services.storage import signed_download_url
+
+    return signed_download_url("tour-audio", path, expires_in=3600)
 
 
 def _to_house_out(row: dict) -> "HouseOut":
@@ -324,8 +323,9 @@ def auto_fill_listing(
                 file=last_image_bytes,
                 file_options={"content-type": "image/png", "upsert": "true"},
             )
-            signed = sb.storage.from_("tour-audio").create_signed_url(path, 600)
-            debug_url = signed.get("signed_url") or signed.get("signedURL")
+            from app.services.storage import signed_download_url
+
+            debug_url = signed_download_url("tour-audio", path, expires_in=600)
         except Exception:
             log.exception("auto-fill: failed to store debug screenshot")
 
@@ -636,18 +636,14 @@ def get_media(
     """Return signed URLs for the house's archived audio + video. URLs expire
     in 1 hour; the page refetches on next load."""
     house = get_house_for_user(house_id, user.id)
-    sb = supabase()
 
     def _sign(path: str | None) -> str | None:
-        if not path:
-            return None
-        try:
-            res = sb.storage.from_("tour-audio").create_signed_url(path, 3600)
-            return res.get("signedURL") or res.get("signedUrl")
-        except Exception as e:
-            log.exception("sign url failed for %s", path)
-            sentry_sdk.capture_exception(e)
-            return None
+        # Same resilient HTTP/1.1 path as _sign_photo — storage3's
+        # HTTP/2 connections drop intermittently with
+        # RemoteProtocolError.
+        from app.services.storage import signed_download_url
+
+        return signed_download_url("tour-audio", path, expires_in=3600) if path else None
 
     return MediaUrls(
         audio_url=_sign(house.get("audio_url")),

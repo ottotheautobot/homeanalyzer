@@ -72,14 +72,14 @@ def _stream_download_to_tempfile(storage_path: str) -> str:
     Uses a signed download URL + httpx streaming so we never hold the
     whole video in process memory — important on Railway where a 368 MB
     in-memory blob crashed the worker."""
-    sb = supabase()
-    # Mint a short-lived signed URL we can stream from.
-    res = sb.storage.from_("tour-audio").create_signed_url(
-        storage_path, expires_in=600
-    )
-    signed_url = res.get("signed_url") or res.get("signedURL")
+    # Mint a short-lived signed URL we can stream from. Use the
+    # resilient helper — storage3's HTTP/2 client drops connections
+    # under load with RemoteProtocolError.
+    from app.services.storage import signed_download_url
+
+    signed_url = signed_download_url("tour-audio", storage_path, expires_in=600)
     if not signed_url:
-        raise RuntimeError(f"create_signed_url returned no URL: {list(res.keys())}")
+        raise RuntimeError("signed_download_url returned None")
 
     fd, path = tempfile.mkstemp(suffix=os.path.splitext(storage_path)[1] or ".mp4")
     os.close(fd)
