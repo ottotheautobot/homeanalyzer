@@ -32,11 +32,48 @@ def is_configured() -> bool:
     return bool(settings.apify_api_token)
 
 
-def _post_actor(url: str, body: dict, timeout: float = 60.0) -> list[dict] | None:
+class ApifyResult:
+    """Detailed diagnostic of an actor call. `items` is None on any
+    failure; the other fields surface the why so we can debug without
+    Railway log access."""
+
+    def __init__(
+        self,
+        items: list[dict] | None,
+        status: int | None,
+        elapsed_s: float,
+        error: str | None,
+        body_preview: str = "",
+    ):
+        self.items = items
+        self.status = status
+        self.elapsed_s = elapsed_s
+        self.error = error
+        self.body_preview = body_preview
+
+    @property
+    def trace_tag(self) -> str:
+        """Compact tag for the auto-fill tier_trace string."""
+        if self.error:
+            return f"err({self.error})"
+        if self.status and self.status != 200:
+            return f"http_{self.status}"
+        if self.items is None:
+            return "bad_json"
+        return f"items={len(self.items)}"
+
+
+def _post_actor(url: str, body: dict, timeout: float = 120.0) -> ApifyResult:
     """Shared POST + JSON-parse logic for run-sync-get-dataset-items.
-    Returns a list of dataset items, or None on any failure."""
+    Returns an ApifyResult with full diagnostic context. Apify actor
+    cold starts can hit 30-60s on the free tier, so the timeout is
+    deliberately generous."""
+    import time as _time
+
     if not settings.apify_api_token:
-        return None
+        return ApifyResult(None, None, 0.0, "no_token")
+
+    t0 = _time.monotonic()
     try:
         with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
             r = client.post(
@@ -44,37 +81,51 @@ def _post_actor(url: str, body: dict, timeout: float = 60.0) -> list[dict] | Non
                 params={"token": settings.apify_api_token},
                 json=body,
             )
-    except Exception:
+    except httpx.TimeoutException:
+        elapsed = _time.monotonic() - t0
+        log.warning("apify timed out after %.1fs url=%s", elapsed, url)
+        return ApifyResult(None, None, elapsed, "timeout")
+    except Exception as e:
+        elapsed = _time.monotonic() - t0
         log.exception("apify request failed url=%s", url)
-        return None
+        return ApifyResult(None, None, elapsed, type(e).__name__)
+    elapsed = _time.monotonic() - t0
+    body_preview = (r.text or "")[:300]
+
     if r.status_code != 200:
         log.warning(
-            "apify non-200 status=%s url=%s body=%s",
+            "apify non-200 status=%s elapsed=%.1fs url=%s body=%s",
             r.status_code,
+            elapsed,
             url,
-            r.text[:200],
+            body_preview,
         )
-        return None
+        return ApifyResult(None, r.status_code, elapsed, None, body_preview)
+
     try:
         items = r.json()
     except Exception:
         log.exception("apify response not JSON url=%s", url)
-        return None
+        return ApifyResult(None, 200, elapsed, "bad_json", body_preview)
     if not isinstance(items, list):
-        return None
-    return items
+        return ApifyResult(None, 200, elapsed, "non_list_json", body_preview)
+
+    log.info(
+        "apify ok url=%s elapsed=%.1fs items=%d",
+        url,
+        elapsed,
+        len(items),
+    )
+    return ApifyResult(items, 200, elapsed, None, body_preview)
 
 
-def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | None:
+def lookup_property(address: str, timeout: float = 120.0) -> ApifyResult:
     """Realtor.com path. Cheapest ($0.001/result) and cleanest data
-    when the property is currently or recently listed. Returns None
-    when Realtor doesn't have the property indexed (off-market homes
-    that have never been listed often miss here)."""
-    if not settings.apify_api_token:
-        log.info("apify: not configured, skipping realtor lookup")
-        return None
+    when the property is currently or recently listed. Returns an
+    ApifyResult with full diagnostic info — caller picks .items[0]
+    if any."""
     if not address.strip():
-        return None
+        return ApifyResult(None, None, 0.0, "empty_address")
 
     body = {
         "searchQueries": [address.strip()],
@@ -83,54 +134,22 @@ def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | Non
             "apifyProxyCountry": "US",
         },
     }
-    items = _post_actor(_REALTOR_BASE, body, timeout=timeout)
-    if not items:
-        log.info("apify realtor returned no items for %s", address[:80])
-        return None
-
-    first = items[0]
-    if not isinstance(first, dict):
-        return None
-    log.info(
-        "apify realtor lookup ok address=%s beds=%s baths=%s sqft=%s price=%s",
-        address[:60],
-        first.get("beds"),
-        first.get("baths"),
-        first.get("sqft"),
-        first.get("listPrice"),
-    )
-    return first
+    return _post_actor(_REALTOR_BASE, body, timeout=timeout)
 
 
-def lookup_zillow(address: str, timeout: float = 60.0) -> dict[str, Any] | None:
+def lookup_zillow(address: str, timeout: float = 120.0) -> ApifyResult:
     """Zillow path via Apify's address/url/zpid actor ($0.002/result).
     Zillow has Zestimate data for ~110M US homes including off-market
     properties that Realtor's listing index misses, so this is the
     right fallback when the Realtor lookup returns nothing."""
-    if not settings.apify_api_token:
-        log.info("apify: not configured, skipping zillow lookup")
-        return None
     if not address.strip():
-        return None
+        return ApifyResult(None, None, 0.0, "empty_address")
 
     body = {
         "scrape_type": "property_addresses",
         "multiple_input_box": address.strip(),
     }
-    items = _post_actor(_ZILLOW_BASE, body, timeout=timeout)
-    if not items:
-        log.info("apify zillow returned no items for %s", address[:80])
-        return None
-
-    first = items[0]
-    if not isinstance(first, dict):
-        return None
-    log.info(
-        "apify zillow lookup ok address=%s keys=%s",
-        address[:60],
-        list(first.keys())[:20],
-    )
-    return first
+    return _post_actor(_ZILLOW_BASE, body, timeout=timeout)
 
 
 def _intish(v: Any) -> int | None:

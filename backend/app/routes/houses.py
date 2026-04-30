@@ -252,48 +252,40 @@ def auto_fill_listing(
     # Tier 1: Apify Realtor actor — cheapest path, best for currently-
     # listed homes. Often misses off-market properties.
     if apify_configured:
-        item = apify.lookup_property(address)
-        if item is None:
-            trace.append("realtor:no_items")
-        else:
-            mapped = apify.to_listing_shape(item)
-            extracted = [
-                k for k in ("list_price", "beds", "baths", "sqft", "address")
-                if mapped.get(k) is not None
-            ]
-            trace.append(f"realtor:found(extracted={extracted or 'none'})")
-            if any(
-                mapped.get(k) is not None
-                for k in ("list_price", "beds", "baths", "sqft")
-            ):
-                mapped.setdefault("listing_url", "")
-                mapped["source"] = "apify"
-                mapped["tier_trace"] = trace
-                return ParseListingOut(**mapped)
+        result = apify.lookup_property(address)
+        trace.append(f"realtor:{result.trace_tag}({result.elapsed_s:.1f}s)")
+        if result.items:
+            first = result.items[0]
+            if isinstance(first, dict):
+                mapped = apify.to_listing_shape(first)
+                if any(
+                    mapped.get(k) is not None
+                    for k in ("list_price", "beds", "baths", "sqft")
+                ):
+                    mapped.setdefault("listing_url", "")
+                    mapped["source"] = "apify"
+                    mapped["tier_trace"] = trace
+                    return ParseListingOut(**mapped)
 
     # Tier 2: Apify Zillow actor — covers off-market homes via
     # Zestimate. Same Apify token, slightly more expensive
     # ($0.002/result) but Zillow indexes ~110M US homes vs Realtor's
     # smaller listed-only set.
     if apify_configured:
-        item = apify.lookup_zillow(address)
-        if item is None:
-            trace.append("zillow:no_items")
-        else:
-            mapped = apify.to_listing_shape_zillow(item)
-            extracted = [
-                k for k in ("list_price", "beds", "baths", "sqft", "address")
-                if mapped.get(k) is not None
-            ]
-            trace.append(f"zillow:found(extracted={extracted or 'none'})")
-            if any(
-                mapped.get(k) is not None
-                for k in ("list_price", "beds", "baths", "sqft")
-            ):
-                mapped.setdefault("listing_url", "")
-                mapped["source"] = "apify"
-                mapped["tier_trace"] = trace
-                return ParseListingOut(**mapped)
+        result = apify.lookup_zillow(address)
+        trace.append(f"zillow:{result.trace_tag}({result.elapsed_s:.1f}s)")
+        if result.items:
+            first = result.items[0]
+            if isinstance(first, dict):
+                mapped = apify.to_listing_shape_zillow(first)
+                if any(
+                    mapped.get(k) is not None
+                    for k in ("list_price", "beds", "baths", "sqft")
+                ):
+                    mapped.setdefault("listing_url", "")
+                    mapped["source"] = "apify"
+                    mapped["tier_trace"] = trace
+                    return ParseListingOut(**mapped)
 
     # Tier 3: Browserless render + Haiku Vision (fallback).
     if not browserless.is_configured():
