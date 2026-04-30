@@ -97,9 +97,11 @@ def _post_actor(url: str, body: dict, timeout: float = 120.0) -> ApifyResult:
     elapsed = _time.monotonic() - t0
     body_preview = (r.text or "")[:300]
 
-    if r.status_code != 200:
+    # Apify returns 201 when run-sync completes synchronously with
+    # results created, not 200. Accept any 2xx.
+    if r.status_code >= 400:
         log.warning(
-            "apify non-200 status=%s elapsed=%.1fs url=%s body=%s",
+            "apify error status=%s elapsed=%.1fs url=%s body=%s",
             r.status_code,
             elapsed,
             url,
@@ -151,10 +153,15 @@ def lookup_zillow(address: str, timeout: float = 180.0) -> ApifyResult:
     if not address.strip():
         return ApifyResult(None, None, 0.0, "empty_address")
 
+    # listingType enum: for_sale | for_rent | recently_sold. "ALL"
+    # was invalid (returned 400). Default to for_sale; if a sale
+    # listing isn't found and Realtor missed too, downstream tiers
+    # take over. Could chain for_rent / recently_sold here in a
+    # follow-up if discovery shows it matters.
     body = {
         "mode": "combined",
         "searchLocation": address.strip(),
-        "listingType": "ALL",
+        "listingType": "for_sale",
         "maxListings": 1,
         "useApifyProxy": True,
         "proxyCountry": "US",
