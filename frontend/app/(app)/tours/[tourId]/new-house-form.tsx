@@ -1,7 +1,17 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { Camera, ImageIcon, Loader2, MapPin, Search, Sparkles } from "lucide-react";
+import {
+  Camera,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  ImageIcon,
+  Loader2,
+  MapPin,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -11,6 +21,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clientFetch } from "@/lib/api-client";
 import type { House } from "@/lib/types";
+
+type Form = {
+  address: string;
+  list_price: string;
+  price_kind: "sale" | "rent";
+  sqft: string;
+  beds: string;
+  baths: string;
+};
+
+const emptyForm: Form = {
+  address: "",
+  list_price: "",
+  price_kind: "sale",
+  sqft: "",
+  beds: "",
+  baths: "",
+};
 
 type ParseListingOut = {
   address: string | null;
@@ -33,24 +61,6 @@ type ParseListingOut = {
     | "render_failed";
   debug_screenshot_url?: string | null;
   tier_trace?: string[] | null;
-};
-
-type Form = {
-  address: string;
-  list_price: string;
-  price_kind: "sale" | "rent";
-  sqft: string;
-  beds: string;
-  baths: string;
-};
-
-const emptyForm: Form = {
-  address: "",
-  list_price: "",
-  price_kind: "sale",
-  sqft: "",
-  beds: "",
-  baths: "",
 };
 
 function buildPayload(f: Form): Record<string, unknown> {
@@ -105,14 +115,15 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
   const [geoStatus, setGeoStatus] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const [debugScreenshotUrl, setDebugScreenshotUrl] = useState<string | null>(null);
-  const [debugTrace, setDebugTrace] = useState<string[] | null>(null);
-  const [showUrlImport, setShowUrlImport] = useState(false);
-  const [importUrl, setImportUrl] = useState("");
+  const [showFallback, setShowFallback] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
   const screenshotRef = useRef<HTMLInputElement>(null);
+  // Track which address we already attempted auto-fill on so a quick
+  // address re-selection doesn't burn another lookup credit.
+  const lastTriedAddress = useRef<string | null>(null);
 
-  function applyParsed(d: ParseListingOut, opts: { setPhoto?: boolean }) {
+  function applyParsed(d: ParseListingOut): number {
     const next: Partial<Form> = {};
     let filled = 0;
     if (d.address) {
@@ -142,75 +153,9 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
     return filled;
   }
 
-  const importImage = useMutation({
-    mutationFn: async (file: File): Promise<ParseListingOut> => {
-      const fd = new FormData();
-      fd.append("image", file, file.name);
-      const data = await clientFetch<ParseListingOut>(
-        "/houses/parse-listing-image",
-        { method: "POST", body: fd },
-      );
-      return data;
-    },
-    onMutate: () => {
-      setImportNote(null);
-      setImportError(null);
-    },
-    onSuccess: (d, file) => {
-      const filled = applyParsed(d, { setPhoto: true });
-      if (filled === 0) {
-        setImportError(
-          "Couldn't read any fields from that screenshot. Try a cleaner crop or fill in manually.",
-        );
-        return;
-      }
-      // The screenshot itself becomes the curb-appeal photo if the
-      // user hasn't already picked one — saves them a step and gives
-      // every house a visual.
-      if (!photo) {
-        setPhoto(file);
-      }
-      setImportNote(`Imported ${filled} field${filled === 1 ? "" : "s"} from screenshot.`);
-    },
-    onError: (e) => {
-      setImportError(
-        e instanceof Error ? e.message : "Couldn't read that screenshot.",
-      );
-    },
-  });
-
-  const importUrlMutation = useMutation({
-    mutationFn: async (url: string): Promise<ParseListingOut> =>
-      clientFetch<ParseListingOut>("/houses/parse-listing", {
-        method: "POST",
-        body: JSON.stringify({ url }),
-      }),
-    onMutate: () => {
-      setImportNote(null);
-      setImportError(null);
-    },
-    onSuccess: (d) => {
-      const filled = applyParsed(d, {});
-      if (d.source === "fetch_failed" || filled === 0) {
-        setImportError(
-          "That listing site is blocking us — try a screenshot of the page instead.",
-        );
-        return;
-      }
-      setImportNote(`Imported ${filled} field${filled === 1 ? "" : "s"} from URL.`);
-      setShowUrlImport(false);
-      setImportUrl("");
-    },
-    onError: (e) => {
-      setImportError(
-        e instanceof Error ? e.message : "Couldn't read that URL.",
-      );
-    },
-  });
-
-  // Server-side render-and-screenshot via Browserless. Given just the
-  // address, we render a Zillow search page in a real Chrome (stealth)
-  // and feed the screenshot to Haiku Vision. One tap → form fills.
+  // Auto-fire when the user picks an address from autocomplete. The
+  // mutation runs server-side via Apify (Realtor → Zillow) and falls
+  // back to Browserless+Haiku-Vision. Form fields populate inline.
   const autoFill = useMutation({
     mutationFn: async (address: string): Promise<ParseListingOut> =>
       clientFetch<ParseListingOut>("/houses/auto-fill", {
@@ -220,45 +165,91 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
     onMutate: () => {
       setImportNote(null);
       setImportError(null);
-      setDebugScreenshotUrl(null);
-      setDebugTrace(null);
+      setShowFallback(false);
     },
     onSuccess: (d) => {
-      if (d.debug_screenshot_url) {
-        setDebugScreenshotUrl(d.debug_screenshot_url);
-      }
-      if (d.tier_trace && d.tier_trace.length > 0) {
-        setDebugTrace(d.tier_trace);
-      }
-      if (d.source === "not_configured") {
-        setImportError(
-          "Auto-fill isn't configured on this server. Use the screenshot path below.",
-        );
-        return;
-      }
-      if (d.source === "render_failed") {
-        setImportError(
-          "Couldn't reach the listing site. Try a screenshot of the page instead.",
-        );
-        return;
-      }
-      const filled = applyParsed(d, {});
+      const filled = applyParsed(d);
       if (filled === 0) {
         setImportError(
-          "Rendered the page but couldn't pull any fields. The site likely served a captcha or anti-bot page. Try a screenshot from your phone.",
+          "Couldn't find listing details. Fill in below or upload a screenshot.",
         );
+        setShowFallback(true);
+        setShowDetails(true);
         return;
       }
+      const summaryParts = [
+        d.list_price != null
+          ? d.price_kind === "rent"
+            ? `$${d.list_price.toLocaleString()}/mo`
+            : `$${d.list_price.toLocaleString()}`
+          : null,
+        d.beds != null ? `${d.beds} bd` : null,
+        d.baths != null ? `${d.baths} ba` : null,
+        d.sqft != null ? `${d.sqft.toLocaleString()} sqft` : null,
+      ].filter(Boolean);
       setImportNote(
-        `Auto-filled ${filled} field${filled === 1 ? "" : "s"} from listing.`,
+        summaryParts.length
+          ? `Imported · ${summaryParts.join(" · ")}`
+          : `Imported ${filled} field${filled === 1 ? "" : "s"}.`,
       );
     },
     onError: (e) => {
       setImportError(
-        e instanceof Error ? e.message : "Auto-fill failed.",
+        e instanceof Error
+          ? "Couldn't auto-fill. Try a screenshot or fill in below."
+          : "Auto-fill failed.",
+      );
+      setShowFallback(true);
+      setShowDetails(true);
+      void e;
+    },
+  });
+
+  // Manual screenshot fallback for when Apify can't find the
+  // property. Hidden until auto-fill has failed once.
+  const importImage = useMutation({
+    mutationFn: async (file: File): Promise<ParseListingOut> => {
+      const fd = new FormData();
+      fd.append("image", file, file.name);
+      return clientFetch<ParseListingOut>(
+        "/houses/parse-listing-image",
+        { method: "POST", body: fd },
+      );
+    },
+    onMutate: () => {
+      setImportNote(null);
+      setImportError(null);
+    },
+    onSuccess: (d, file) => {
+      const filled = applyParsed(d);
+      if (filled === 0) {
+        setImportError(
+          "Couldn't read that screenshot. Try a cleaner crop or fill in below.",
+        );
+        return;
+      }
+      if (!photo) setPhoto(file);
+      setImportNote(
+        `Imported ${filled} field${filled === 1 ? "" : "s"} from screenshot.`,
+      );
+    },
+    onError: (e) => {
+      setImportError(
+        e instanceof Error ? e.message : "Couldn't read that screenshot.",
       );
     },
   });
+
+  function handleAddressSelect(address: string) {
+    setForm((f) => ({ ...f, address }));
+    if (
+      address.trim().length >= 8 &&
+      address.trim() !== lastTriedAddress.current
+    ) {
+      lastTriedAddress.current = address.trim();
+      autoFill.mutate(address.trim());
+    }
+  }
 
   useEffect(() => {
     if (!photo) {
@@ -290,6 +281,11 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
     onSuccess: () => {
       setForm(emptyForm);
       setPhoto(null);
+      setImportNote(null);
+      setImportError(null);
+      setShowFallback(false);
+      setShowDetails(false);
+      lastTriedAddress.current = null;
       if (photoRef.current) photoRef.current.value = "";
       router.refresh();
     },
@@ -308,386 +304,300 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           pos.coords.longitude,
         );
         if (addr) {
-          setForm((f) => ({ ...f, address: addr }));
+          handleAddressSelect(addr);
           setGeoStatus(null);
         } else {
           setGeoStatus("Couldn't resolve an address from your location");
         }
       },
       (err) => {
-        // Map the GeolocationPositionError codes to plain English so a
-        // fresh user doesn't see "User denied Geolocation" jargon.
         const PERMISSION_DENIED = 1;
         const POSITION_UNAVAILABLE = 2;
         const TIMEOUT = 3;
         if (err.code === PERMISSION_DENIED) {
           setGeoStatus(
-            "Location permission denied. Allow location access in your browser settings, or just type the address.",
+            "Location permission denied. Allow location in your browser settings, or just type the address.",
           );
         } else if (err.code === POSITION_UNAVAILABLE) {
           setGeoStatus(
             "Couldn't determine your location. Try again outside, or type the address.",
           );
         } else if (err.code === TIMEOUT) {
-          setGeoStatus("Location lookup took too long. Try again or type the address.");
+          setGeoStatus(
+            "Location lookup took too long. Try again or type the address.",
+          );
         } else {
-          setGeoStatus("Couldn't get your location. Try typing the address instead.");
+          setGeoStatus(
+            "Couldn't get your location. Try typing the address instead.",
+          );
         }
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
   }
 
-  function searchUrl(site: "zillow" | "redfin" | "google"): string {
-    const q = encodeURIComponent(form.address);
-    if (site === "zillow") return `https://www.zillow.com/homes/${q}_rb/`;
-    if (site === "redfin") return `https://www.redfin.com/stingray/do/location-autocomplete?location=${q}`;
-    return `https://www.google.com/search?q=${q}+for+sale`;
-  }
+  const looksReady =
+    form.address.trim().length >= 4 &&
+    !autoFill.isPending &&
+    !create.isPending;
 
   return (
     <div className="space-y-4">
-      {/* Listing import — three paths from highest-leverage to most
-          manual:
-          1. Auto-fill — type the address, we render Zillow in a real
-             headless Chrome (Browserless, stealth-mode) and let
-             Haiku Vision read the screenshot. One tap, ~5s wait.
-          2. Upload a screenshot from your phone — works around
-             anti-bot since the page came from your authenticated
-             device.
-          3. Paste a URL — only works on smaller sites that don't
-             block scrapers. */}
-      <div className="rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/20 p-3 space-y-2.5">
-        <div className="flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-          <Sparkles className="size-4 text-primary shrink-0 mt-0.5" />
-          <span className="leading-snug">
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">
-              Auto-fill from a listing.
-            </span>{" "}
-            Type the address above, then tap Auto-fill — we&apos;ll
-            look it up on Zillow and pull in beds, baths, sqft, price.
-            Or drop a screenshot from your phone.
-          </span>
+      {/* Address — the only required step. Autocomplete-pick fires
+          auto-fill silently in the background; everything else is
+          either auto-filled or optional. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="address">Address</Label>
+          <button
+            type="button"
+            onClick={useMyLocation}
+            className="text-xs text-primary inline-flex items-center gap-1 active:scale-95 transition-transform"
+          >
+            <MapPin className="size-3.5" />
+            Use my location
+          </button>
         </div>
+        <AddressAutocomplete
+          id="address"
+          value={form.address}
+          onChange={(next) => setForm((f) => ({ ...f, address: next }))}
+          onSelect={(s) => handleAddressSelect(s.address)}
+          placeholder="123 Sea Breeze Ln, Fort Lauderdale, FL"
+          required
+          disabled={create.isPending}
+        />
+        {geoStatus ? (
+          <p className="text-xs text-zinc-500">{geoStatus}</p>
+        ) : null}
+
+        {/* Auto-fill status row — sits inline under address so the
+            user sees what we're doing without scrolling. */}
+        {autoFill.isPending ? (
+          <p className="text-xs text-zinc-500 inline-flex items-center gap-1.5 pt-0.5">
+            <Loader2 className="size-3.5 animate-spin" />
+            Looking up listing details…
+          </p>
+        ) : importNote ? (
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1.5 pt-0.5">
+            <Check className="size-3.5" />
+            {importNote}
+          </p>
+        ) : importError ? (
+          <p className="text-xs text-amber-600 dark:text-amber-400 inline-flex items-center gap-1.5 pt-0.5">
+            <X className="size-3.5" />
+            {importError}
+          </p>
+        ) : null}
+      </div>
+
+      {/* Curb-appeal photo. Renders prominently on mobile so a
+          one-handed flow is "pick address, snap photo, submit". */}
+      <div className="space-y-1.5">
+        <Label>
+          Curb-appeal photo{" "}
+          <span className="text-xs font-normal text-zinc-400">(optional)</span>
+        </Label>
         <input
-          ref={screenshotRef}
+          ref={photoRef}
           type="file"
           accept="image/*"
+          capture="environment"
           className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) importImage.mutate(file);
-            e.target.value = "";
-          }}
+          onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
         />
-        <div className="flex items-center gap-2 flex-wrap">
+        {photoPreview ? (
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photoPreview}
+              alt=""
+              className="size-20 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800 shrink-0"
+            />
+            <div className="flex flex-col gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => photoRef.current?.click()}
+                disabled={create.isPending}
+              >
+                Replace
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setPhoto(null);
+                  if (photoRef.current) photoRef.current.value = "";
+                }}
+                disabled={create.isPending}
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+        ) : (
           <Button
             type="button"
-            size="sm"
-            onClick={() => autoFill.mutate(form.address.trim())}
-            disabled={
-              autoFill.isPending ||
-              importImage.isPending ||
-              importUrlMutation.isPending ||
-              form.address.trim().length < 8
-            }
+            variant="outline"
+            onClick={() => photoRef.current?.click()}
+            disabled={create.isPending}
+            className="w-full sm:w-auto"
           >
-            {autoFill.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Sparkles className="size-4" strokeWidth={2} />
-            )}
-            <span className="ml-1.5">
-              {autoFill.isPending ? "Looking up…" : "Auto-fill from listing"}
-            </span>
+            <Camera className="size-4 mr-1.5" />
+            Take photo
           </Button>
+        )}
+      </div>
+
+      {/* Screenshot fallback — only appears after auto-fill failed.
+          The user can drop a manual Zillow/Redfin screenshot to fill
+          the same fields via Haiku Vision. */}
+      {showFallback ? (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/20 p-3 space-y-2">
+          <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400">
+            <Sparkles className="size-4 shrink-0 mt-0.5" />
+            <span className="leading-snug">
+              Couldn&apos;t find this listing automatically. Drop a
+              screenshot from your phone and we&apos;ll read it instead.
+            </span>
+          </div>
+          <input
+            ref={screenshotRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importImage.mutate(file);
+              e.target.value = "";
+            }}
+          />
           <Button
             type="button"
             size="sm"
             variant="outline"
             onClick={() => screenshotRef.current?.click()}
-            disabled={
-              autoFill.isPending ||
-              importImage.isPending ||
-              importUrlMutation.isPending
-            }
+            disabled={importImage.isPending}
           >
             {importImage.isPending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
-              <ImageIcon className="size-4" strokeWidth={2} />
+              <ImageIcon className="size-4" />
             )}
-            <span className="ml-1.5">Upload screenshot</span>
+            <span className="ml-1.5">Upload listing screenshot</span>
           </Button>
-          {!showUrlImport ? (
-            <button
-              type="button"
-              className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:underline"
-              onClick={() => setShowUrlImport(true)}
-            >
-              or paste a URL
-            </button>
-          ) : null}
         </div>
-        {showUrlImport ? (
-          <div className="flex items-center gap-2">
-            <Input
-              value={importUrl}
-              onChange={(e) => setImportUrl(e.target.value)}
-              placeholder="https://www.zillow.com/homedetails/…"
-              disabled={importUrlMutation.isPending}
-              className="flex-1"
-            />
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => importUrl.trim() && importUrlMutation.mutate(importUrl.trim())}
-              disabled={
-                importUrlMutation.isPending || !importUrl.trim()
-              }
-            >
-              {importUrlMutation.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                "Try URL"
-              )}
-            </Button>
-          </div>
-        ) : null}
-        {importNote ? (
-          <p className="text-xs text-emerald-600 dark:text-emerald-400">
-            {importNote}
-          </p>
-        ) : null}
-        {importError ? (
-          <div className="space-y-1">
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              {importError}
-            </p>
-            {debugTrace ? (
-              <p className="text-[10px] text-zinc-400 font-mono">
-                {debugTrace.join(" → ")}
-              </p>
-            ) : null}
-            {debugScreenshotUrl ? (
-              <a
-                href={debugScreenshotUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="text-xs text-primary hover:underline inline-block"
-              >
-                See what we saw →
-              </a>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5 sm:col-span-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="address">Address</Label>
-            <button
-              type="button"
-              onClick={useMyLocation}
-              className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
-            >
-              <MapPin className="size-3.5" />
-              Use my location
-            </button>
-          </div>
-          <AddressAutocomplete
-            id="address"
-            value={form.address}
-            onChange={(next) =>
-              setForm((f) => ({ ...f, address: next }))
-            }
-            onSelect={(s) => {
-              // The picked address replaces any free-text input. We
-              // don't yet capture coords client-side for new-house —
-              // backend lazy-geocodes when the map loads. Future:
-              // pass lat/lng through so we skip the lazy step.
-              setForm((f) => ({ ...f, address: s.address }));
-            }}
-            placeholder="123 Sea Breeze Ln, Fort Lauderdale, FL"
-            required
-            disabled={create.isPending}
-          />
-          {geoStatus ? (
-            <p className="text-xs text-zinc-500">{geoStatus}</p>
-          ) : null}
-          {/* Always-rendered search row so it doesn't flicker in/out as
-              the user types. Links activate once the address is long
-              enough to plausibly match a listing. */}
-          {(() => {
-            const enabled = form.address.trim().length > 5;
-            const linkCls = enabled
-              ? "text-primary hover:underline"
-              : "text-zinc-400 dark:text-zinc-600 pointer-events-none";
-            return (
-              <div className="flex items-center gap-3 text-xs">
-                <span className="text-zinc-500 inline-flex items-center gap-1">
-                  <Search className="size-3" />
-                  Search listings:
-                </span>
-                <a
-                  href={enabled ? searchUrl("zillow") : "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={linkCls}
-                  aria-disabled={!enabled}
-                  tabIndex={enabled ? 0 : -1}
-                >
-                  Zillow
-                </a>
-                <a
-                  href={enabled ? searchUrl("redfin") : "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={linkCls}
-                  aria-disabled={!enabled}
-                  tabIndex={enabled ? 0 : -1}
-                >
-                  Redfin
-                </a>
-                <a
-                  href={enabled ? searchUrl("google") : "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={linkCls}
-                  aria-disabled={!enabled}
-                  tabIndex={enabled ? 0 : -1}
-                >
-                  Google
-                </a>
-              </div>
-            );
-          })()}
-        </div>
-
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label>Curb appeal photo</Label>
-          <input
-            ref={photoRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
-          />
-          {photoPreview ? (
-            <div className="flex items-center gap-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={photoPreview}
-                alt=""
-                className="size-20 rounded-lg object-cover border border-zinc-200 dark:border-zinc-800"
-              />
-              <div className="flex flex-col gap-1">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => photoRef.current?.click()}
-                  disabled={create.isPending}
-                >
-                  Replace
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setPhoto(null);
-                    if (photoRef.current) photoRef.current.value = "";
-                  }}
-                  disabled={create.isPending}
-                >
-                  Remove
-                </Button>
-              </div>
-            </div>
+      {/* Detail fields — collapsed by default since auto-fill usually
+          handles them. User can expand to verify or override. */}
+      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <button
+          type="button"
+          onClick={() => setShowDetails((s) => !s)}
+          className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-zinc-700 dark:text-zinc-300 active:bg-zinc-50 dark:active:bg-zinc-900 active:scale-[0.99] transition-all"
+          aria-expanded={showDetails}
+        >
+          <span className="font-medium">
+            {showDetails ? "Hide" : "Show"} details
+          </span>
+          {showDetails ? (
+            <ChevronUp className="size-4 text-zinc-400" />
           ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => photoRef.current?.click()}
-              disabled={create.isPending}
-            >
-              <Camera className="size-4 mr-1.5" />
-              Take photo
-            </Button>
+            <ChevronDown className="size-4 text-zinc-400" />
           )}
-        </div>
-
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label>Price</Label>
-          <div className="flex gap-2">
-            <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-800 p-0.5 shrink-0">
-              {(["sale", "rent"] as const).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setForm((f) => ({ ...f, price_kind: k }))}
+        </button>
+        {showDetails ? (
+          <div className="border-t border-zinc-200 dark:border-zinc-800 p-3 space-y-3">
+            <div className="space-y-1.5">
+              <Label>Price</Label>
+              <div className="flex gap-2">
+                <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-800 p-0.5 shrink-0">
+                  {(["sale", "rent"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() =>
+                        setForm((f) => ({ ...f, price_kind: k }))
+                      }
+                      disabled={create.isPending}
+                      className={`px-3 h-8 rounded-md text-xs font-medium transition-colors ${
+                        form.price_kind === k
+                          ? "bg-primary text-primary-foreground"
+                          : "text-zinc-600 dark:text-zinc-400"
+                      }`}
+                    >
+                      {k === "sale" ? "Sale" : "Rent"}
+                    </button>
+                  ))}
+                </div>
+                <Input
+                  id="list_price"
+                  inputMode="numeric"
+                  placeholder={form.price_kind === "rent" ? "3500" : "850000"}
+                  value={form.list_price}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, list_price: e.target.value }))
+                  }
                   disabled={create.isPending}
-                  className={`px-2.5 h-7 rounded-md text-xs font-medium transition-colors ${
-                    form.price_kind === k
-                      ? "bg-primary text-primary-foreground"
-                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
-                  }`}
-                >
-                  {k === "sale" ? "Sale" : "Rent"}
-                </button>
-              ))}
+                  className="flex-1"
+                />
+              </div>
             </div>
-            <Input
-              id="list_price"
-              inputMode="numeric"
-              placeholder={form.price_kind === "rent" ? "3500/mo" : "850000"}
-              value={form.list_price}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, list_price: e.target.value }))
-              }
-              disabled={create.isPending}
-              className="flex-1"
-            />
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="beds" className="text-xs">
+                  Beds
+                </Label>
+                <Input
+                  id="beds"
+                  inputMode="decimal"
+                  placeholder="3"
+                  value={form.beds}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, beds: e.target.value }))
+                  }
+                  disabled={create.isPending}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="baths" className="text-xs">
+                  Baths
+                </Label>
+                <Input
+                  id="baths"
+                  inputMode="decimal"
+                  placeholder="2.5"
+                  value={form.baths}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, baths: e.target.value }))
+                  }
+                  disabled={create.isPending}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sqft" className="text-xs">
+                  Sqft
+                </Label>
+                <Input
+                  id="sqft"
+                  inputMode="numeric"
+                  placeholder="1850"
+                  value={form.sqft}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, sqft: e.target.value }))
+                  }
+                  disabled={create.isPending}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="sqft">Sqft</Label>
-          <Input
-            id="sqft"
-            inputMode="numeric"
-            placeholder="1850"
-            value={form.sqft}
-            onChange={(e) => setForm((f) => ({ ...f, sqft: e.target.value }))}
-            disabled={create.isPending}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="beds">Beds</Label>
-          <Input
-            id="beds"
-            inputMode="decimal"
-            placeholder="3"
-            value={form.beds}
-            onChange={(e) => setForm((f) => ({ ...f, beds: e.target.value }))}
-            disabled={create.isPending}
-          />
-        </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label htmlFor="baths">Baths</Label>
-          <Input
-            id="baths"
-            inputMode="decimal"
-            placeholder="2.5"
-            value={form.baths}
-            onChange={(e) => setForm((f) => ({ ...f, baths: e.target.value }))}
-            disabled={create.isPending}
-          />
-        </div>
+        ) : null}
       </div>
+
       {create.isError ? (
         <p className="text-sm text-red-600 dark:text-red-400">
           {create.error instanceof Error ? create.error.message : "Failed"}
@@ -695,7 +605,7 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
       ) : null}
       <Button
         onClick={() => create.mutate()}
-        disabled={!form.address.trim() || create.isPending}
+        disabled={!looksReady}
         className="w-full"
         size="lg"
       >
