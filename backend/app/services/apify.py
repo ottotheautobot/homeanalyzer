@@ -257,13 +257,129 @@ def to_listing_shape_zillow(item: dict[str, Any]) -> dict[str, Any]:
             href = f"https://www.zillow.com{href}"
         out["listing_url"] = href
 
-    # Photo — actor sometimes returns a CDN URL we can use as the
-    # curb-appeal photo placeholder.
-    photo = item.get("imgSrc") or item.get("hiResImageLink")
-    if isinstance(photo, str) and photo:
+    # Photo — Zillow listings almost always lead with the exterior
+    # shot, so first-photo doubles as the curb-appeal pick.
+    photo = _first_photo_url(item)
+    if photo:
         out["photo_url"] = photo
 
     return out
+
+
+_EXTERIOR_TAG_TOKENS = (
+    "front",
+    "exterior",
+    "facade",
+    "façade",
+    "curb",
+    "elevation",
+    "house_view",
+    "street_view",
+)
+
+
+def _photo_url_from_entry(entry: Any) -> str | None:
+    """Extract just the URL string from a photo entry, ignoring tags."""
+    if isinstance(entry, str):
+        return entry if entry.startswith(("http://", "https://")) else None
+    if isinstance(entry, dict):
+        for k in ("href", "url", "src", "imgSrc"):
+            v = entry.get(k)
+            if isinstance(v, str) and v.startswith(("http://", "https://")):
+                return v
+    return None
+
+
+def _entry_is_exterior(entry: Any) -> bool:
+    """Realtor's photo entries carry AI-generated tags like
+    {"label": "Front", "type": "exterior"}. Prefer one of those when
+    available so we get a curb-appeal shot, not the kitchen island."""
+    if not isinstance(entry, dict):
+        return False
+    tag_blobs = []
+    for key in ("tags", "categories", "labels"):
+        v = entry.get(key)
+        if isinstance(v, list):
+            tag_blobs.extend(v)
+    # Some shapes nest tags in classifications.
+    classifications = entry.get("classifications") or entry.get("ai_tags")
+    if isinstance(classifications, list):
+        tag_blobs.extend(classifications)
+    if not tag_blobs:
+        return False
+    flat: list[str] = []
+    for t in tag_blobs:
+        if isinstance(t, str):
+            flat.append(t.lower())
+        elif isinstance(t, dict):
+            for tk in ("label", "name", "type", "value"):
+                tv = t.get(tk)
+                if isinstance(tv, str):
+                    flat.append(tv.lower())
+    return any(any(tok in s for tok in _EXTERIOR_TAG_TOKENS) for s in flat)
+
+
+def _first_photo_url(item: dict[str, Any]) -> str | None:
+    """Pull a listing photo URL out of either actor's response,
+    preferring exterior / front-of-house shots when the data tells us
+    which one to pick.
+
+    Strategy:
+      1. Scan photo arrays for an entry tagged exterior/front/etc.
+      2. If none, fall back to the first photo in the array (listing
+         agents almost universally lead with the curb-appeal shot).
+      3. If no array, accept any direct top-level photo field.
+      4. Last resort: dive into nested propertyData (Realtor stores
+         the full raw page response there)."""
+
+    def _ok(u: Any) -> str | None:
+        if isinstance(u, str) and u.startswith(("http://", "https://")):
+            return u
+        return None
+
+    # Photo arrays first — they usually carry the most signal.
+    for arr_key in ("photos", "images", "imgList"):
+        arr = item.get(arr_key)
+        if not isinstance(arr, list) or not arr:
+            continue
+        # Pass 1: prefer a tagged-exterior entry.
+        for entry in arr:
+            if _entry_is_exterior(entry):
+                u = _photo_url_from_entry(entry)
+                if u:
+                    return u
+        # Pass 2: first usable URL in the array.
+        for entry in arr:
+            u = _photo_url_from_entry(entry)
+            if u:
+                return u
+
+    # Direct top-level fields.
+    for key in (
+        "photo_url",
+        "primaryPhoto",
+        "primary_photo",
+        "imgSrc",
+        "hiResImageLink",
+        "image",
+    ):
+        u = _ok(item.get(key))
+        if u:
+            return u
+
+    # Realtor's primary_photo can be a dict {href: ...}.
+    primary = item.get("primary_photo") or item.get("primaryPhoto")
+    if isinstance(primary, dict):
+        u = _ok(primary.get("href") or primary.get("url"))
+        if u:
+            return u
+
+    # Last resort: dive into nested propertyData (Realtor's actor
+    # stores the full raw page response there).
+    nested = item.get("propertyData")
+    if isinstance(nested, dict):
+        return _first_photo_url(nested)
+    return None
 
 
 def to_listing_shape(item: dict[str, Any]) -> dict[str, Any]:
@@ -314,5 +430,9 @@ def to_listing_shape(item: dict[str, Any]) -> dict[str, Any]:
     href = item.get("href")
     if isinstance(href, str) and href:
         out["listing_url"] = href
+
+    photo = _first_photo_url(item)
+    if photo:
+        out["photo_url"] = photo
 
     return out

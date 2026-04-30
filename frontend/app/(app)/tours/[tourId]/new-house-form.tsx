@@ -76,6 +76,23 @@ function buildPayload(f: Form): Record<string, unknown> {
   return out;
 }
 
+async function urlToFile(url: string): Promise<File | null> {
+  // Most listing-photo CDNs (zillowstatic.com, akamai, AWS) serve
+  // with permissive CORS, so a browser-direct fetch usually works.
+  // If a particular host blocks CORS the catch returns null and the
+  // user just picks their own photo.
+  try {
+    const r = await fetch(url, { mode: "cors" });
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    if (!blob.type.startsWith("image/")) return null;
+    const ext = (blob.type.split("/")[1] || "jpg").split(";")[0];
+    return new File([blob], `listing.${ext}`, { type: blob.type });
+  } catch {
+    return null;
+  }
+}
+
 async function reverseGeocode(
   lat: number,
   lon: number,
@@ -192,6 +209,17 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
           ? `Imported · ${summaryParts.join(" · ")}`
           : `Imported ${filled} field${filled === 1 ? "" : "s"}.`,
       );
+      // Bonus: pull the listing's exterior photo as the curb-appeal
+      // shot. Backend prefers tagged-exterior entries when the actor
+      // ships AI tags; falls back to first photo otherwise. Skip if
+      // the user already picked their own photo.
+      if (d.photo_url && !photo) {
+        urlToFile(d.photo_url).then((file) => {
+          if (file) {
+            setPhoto((current) => current ?? file);
+          }
+        });
+      }
     },
     onError: (e) => {
       setImportError(
