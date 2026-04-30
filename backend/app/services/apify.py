@@ -22,7 +22,12 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 _REALTOR_ACTOR = "kawsar~realtor-property-details-cheap"
-_ZILLOW_ACTOR = "one-api~zillow-scrape-address-url-zpid"
+# brilliant_gum's Zillow scraper is pay-per-event on the free tier
+# (~$0.013 per single-property lookup: $0.01 actor-start + $0.003
+# search-listing). The previous one-api~zillow-scrape-address-url-zpid
+# actor we tried first was a $25/mo flat-rate actor that silently
+# returns nothing without a paid subscription.
+_ZILLOW_ACTOR = "brilliant_gum~zillow-property-scraper"
 
 _REALTOR_BASE = f"https://api.apify.com/v2/acts/{_REALTOR_ACTOR}/run-sync-get-dataset-items"
 _ZILLOW_BASE = f"https://api.apify.com/v2/acts/{_ZILLOW_ACTOR}/run-sync-get-dataset-items"
@@ -137,17 +142,28 @@ def lookup_property(address: str, timeout: float = 120.0) -> ApifyResult:
     return _post_actor(_REALTOR_BASE, body, timeout=timeout)
 
 
-def lookup_zillow(address: str, timeout: float = 120.0) -> ApifyResult:
-    """Zillow path via Apify's address/url/zpid actor ($0.002/result).
-    Zillow has Zestimate data for ~110M US homes including off-market
-    properties that Realtor's listing index misses, so this is the
-    right fallback when the Realtor lookup returns nothing."""
+def lookup_zillow(address: str, timeout: float = 180.0) -> ApifyResult:
+    """Zillow path via brilliant_gum's pay-per-event actor.
+    `mode: combined` gets both a search hit + the full detail block
+    in one run; `maxListings: 1` keeps cost predictable. Single
+    lookup costs ~$0.013 on the free tier ($0.01 actor-start +
+    $0.003 search-listing event)."""
     if not address.strip():
         return ApifyResult(None, None, 0.0, "empty_address")
 
     body = {
-        "scrape_type": "property_addresses",
-        "multiple_input_box": address.strip(),
+        "mode": "combined",
+        "searchLocation": address.strip(),
+        "listingType": "ALL",
+        "maxListings": 1,
+        "useApifyProxy": True,
+        "proxyCountry": "US",
+        # Disable the heavier extras — we only need the headline
+        # fields. Also keeps each lookup faster.
+        "computeMetrics": False,
+        "includeSchools": False,
+        "includeHistory": False,
+        "includeNearby": False,
     }
     return _post_actor(_ZILLOW_BASE, body, timeout=timeout)
 
