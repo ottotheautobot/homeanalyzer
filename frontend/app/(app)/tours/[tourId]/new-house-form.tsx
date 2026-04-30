@@ -32,6 +32,7 @@ type ParseListingOut = {
     | "not_configured"
     | "render_failed";
   debug_screenshot_url?: string | null;
+  tier_trace?: string[] | null;
 };
 
 type Form = {
@@ -105,6 +106,7 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [debugScreenshotUrl, setDebugScreenshotUrl] = useState<string | null>(null);
+  const [debugTrace, setDebugTrace] = useState<string[] | null>(null);
   const [showUrlImport, setShowUrlImport] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const photoRef = useRef<HTMLInputElement>(null);
@@ -219,10 +221,14 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
       setImportNote(null);
       setImportError(null);
       setDebugScreenshotUrl(null);
+      setDebugTrace(null);
     },
     onSuccess: (d) => {
       if (d.debug_screenshot_url) {
         setDebugScreenshotUrl(d.debug_screenshot_url);
+      }
+      if (d.tier_trace && d.tier_trace.length > 0) {
+        setDebugTrace(d.tier_trace);
       }
       if (d.source === "not_configured") {
         setImportError(
@@ -458,6 +464,11 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
             <p className="text-xs text-amber-600 dark:text-amber-400">
               {importError}
             </p>
+            {debugTrace ? (
+              <p className="text-[10px] text-zinc-400 font-mono">
+                {debugTrace.join(" → ")}
+              </p>
+            ) : null}
             {debugScreenshotUrl ? (
               <a
                 href={debugScreenshotUrl}

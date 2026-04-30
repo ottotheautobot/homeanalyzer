@@ -158,10 +158,14 @@ class ParseListingOut(BaseModel):
     baths: float | None = None
     photo_url: str | None = None
     listing_url: str
-    source: str  # "jsonld" | "meta" | "haiku" | "image" | "fetch_failed" | ...
+    source: str  # "jsonld" | "meta" | "haiku" | "image" | "apify" | ...
     # Set on auto-fill failures so the user can see what we actually
     # rendered. Signed URL, expires in 10 minutes.
     debug_screenshot_url: str | None = None
+    # Per-tier outcome trace so we can diagnose failures without
+    # Railway log access. e.g. ["apify:not_configured",
+    # "browserless:no_fields_extracted"]. Only populated by auto-fill.
+    tier_trace: list[str] | None = None
 
 
 @router.post("/houses/parse-listing", response_model=ParseListingOut)
@@ -240,28 +244,41 @@ def auto_fill_listing(
     from app.services.listing import parse_listing_image
 
     address = payload.address.strip()
+    trace: list[str] = []
 
     # Tier 1: Apify Realtor actor. Cheapest, fastest, most reliable.
-    if apify.is_configured():
+    if not apify.is_configured():
+        trace.append("apify:not_configured")
+    else:
         item = apify.lookup_property(address)
-        if item:
+        if item is None:
+            trace.append("apify:no_items")
+        else:
             mapped = apify.to_listing_shape(item)
+            extracted = {
+                k: mapped.get(k)
+                for k in ("list_price", "beds", "baths", "sqft", "address")
+                if mapped.get(k) is not None
+            }
+            trace.append(
+                f"apify:found_item(extracted={list(extracted.keys()) or 'none'})"
+            )
             if any(
                 mapped.get(k) is not None
                 for k in ("list_price", "beds", "baths", "sqft")
             ):
                 mapped.setdefault("listing_url", "")
                 mapped["source"] = "apify"
+                mapped["tier_trace"] = trace
                 return ParseListingOut(**mapped)
-            log.info("apify returned item but no extractable fields for %s", address[:60])
 
     # Tier 2: Browserless render + Haiku Vision.
     if not browserless.is_configured():
-        # Apify already tried (or wasn't configured) and Browserless
-        # isn't either — nothing more we can do.
+        trace.append("browserless:not_configured")
         return ParseListingOut(
             listing_url="",
             source="not_configured" if not apify.is_configured() else "render_failed",
+            tier_trace=trace,
         )
 
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", address).strip("-")
@@ -276,8 +293,10 @@ def auto_fill_listing(
         last_url = url
         img_bytes = browserless.screenshot(url)
         if not img_bytes:
+            trace.append(f"browserless:render_failed({site})")
             log.warning("auto-fill: %s render returned no bytes for %s", site, url)
             continue
+        trace.append(f"browserless:rendered({site})")
         last_image_bytes = img_bytes
         data = parse_listing_image(img_bytes, "image/png", target_address=address)
         if data.get("source") == "image" and any(
@@ -285,7 +304,9 @@ def auto_fill_listing(
             for k in ("list_price", "beds", "baths", "sqft")
         ):
             data.setdefault("listing_url", url)
+            data["tier_trace"] = trace
             return ParseListingOut(**data)
+        trace.append(f"vision:no_fields({site})")
         log.info(
             "auto-fill: %s rendered but no fields extracted (vision source=%s)",
             site,
@@ -313,11 +334,13 @@ def auto_fill_listing(
             listing_url=last_url,
             source="render_failed",
             debug_screenshot_url=debug_url,
+            tier_trace=trace,
         )
     return ParseListingOut(
         listing_url=last_url,
         source="image_failed",
         debug_screenshot_url=debug_url,
+        tier_trace=trace,
     )
 
 
