@@ -51,13 +51,14 @@ General App with **Meeting SDK** + **Programmatic Join** features both toggled o
 |---|---|
 | API key | Railway env `DEEPGRAM_API_KEY` |
 
-## Browserless (listing auto-fill)
+## Listing auto-fill (Apify primary, Browserless fallback)
 
-Optional. When set, the "Auto-fill from listing" button on the new-house form renders a Zillow search page in a real headless Chrome (with stealth mode + ad blocking) and ships the screenshot to Haiku Vision for field extraction. Without it, the user can still upload a manual screenshot or paste a URL.
+Optional. The "Auto-fill from listing" button on the new-house form looks up bed/bath/sqft/price for an address. Two tiers:
 
-| Credential | Where | Notes |
-|---|---|---|
-| API token | Railway env `BROWSERLESS_API_TOKEN` | Free trial, then $5/mo for 1k pages or pay-per-use ~$0.01/page. Sign up at browserless.io. We hit the v2 `/screenshot` endpoint with `?stealth=true&blockAds=true`. |
+| Tier | Credential | Where | Notes |
+|---|---|---|---|
+| **Primary: Apify Realtor actor** | API token | Railway env `APIFY_API_TOKEN` | $0.001/lookup, $5/mo free credits ≈ 5k free lookups, no card required for free tier. We hit the `kawsar/realtor-property-details-cheap` actor's `run-sync-get-dataset-items` endpoint with `searchQueries: [address]`. Apify maintains the anti-bot. Sign up at apify.com. |
+| **Fallback: Browserless + Haiku Vision** | API token | Railway env `BROWSERLESS_API_TOKEN` | Used when Apify finds nothing (rare — Realtor's coverage is broad). Renders Zillow / Redfin search pages in stealth Chrome and runs Haiku Vision over the screenshot. $5/mo for 1k pages or pay-per-use ~$0.01/page. Sign up at browserless.io. Optional — if unset, auto-fill returns "no result" when Apify misses. |
 
 ## Routing API (commute distances on /map)
 

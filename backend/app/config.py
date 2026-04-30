@@ -72,12 +72,17 @@ class Settings(BaseSettings):
     # workaround).
     mapbox_api_token: str = ""
 
-    # Browserless — managed headless Chrome. Used to render a Zillow
-    # search page server-side (with stealth mode to bypass anti-bot)
-    # so we can screenshot it and let Haiku Vision extract the
-    # listing details. Signup at browserless.io. Empty = the
-    # /houses/auto-fill endpoint returns "service not configured".
+    # Browserless — managed headless Chrome. Fallback for the
+    # /houses/auto-fill endpoint when Apify can't find the property.
+    # Empty = no fallback, the endpoint relies on Apify only.
     browserless_api_token: str = ""
+
+    # Apify — primary lookup path for /houses/auto-fill. We hit the
+    # Realtor Property Details Cheap actor (kawsar) at $0.001/result;
+    # Apify's $5/mo free credits cover ~5k lookups before any cost.
+    # The actor takes raw addresses, returns structured listing data,
+    # and Apify maintains the anti-bot. Signup at apify.com.
+    apify_api_token: str = ""
 
     # Resend transactional email — used to notify tour participants when a
     # tour starts on a house. Skipped silently if not set.

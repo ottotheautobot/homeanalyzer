@@ -26,6 +26,7 @@ type ParseListingOut = {
     | "meta"
     | "haiku"
     | "image"
+    | "apify"
     | "fetch_failed"
     | "image_failed"
     | "not_configured"

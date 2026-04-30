@@ -216,28 +216,52 @@ def auto_fill_listing(
     payload: AutoFillIn,
     _: AuthUser = Depends(current_user),
 ) -> ParseListingOut:
-    """Fully-automated listing fetch. Given an address, render a
-    real-estate search page in a headless Chrome (Browserless,
-    stealth-mode), screenshot it, run Haiku Vision over the screenshot
-    to extract bed/bath/sqft/price, return structured fields.
+    """Fully-automated listing fetch.
 
-    Tries Zillow and Redfin in sequence — if Zillow's anti-bot wins,
-    Redfin's may not. On failure, surfaces the rendered screenshot via
-    a short-TTL signed URL so the user can see what went wrong (was it
-    a captcha? a no-results page? a layout we didn't anticipate?)."""
+    Two-tier strategy:
+      1. **Apify Realtor.com actor** (primary) — pay-per-result, ~$0.001
+         per address, $5/mo free credits cover ~5k lookups. Apify
+         maintains the anti-bot for us; takes raw addresses, returns
+         structured beds/baths/sqft/price/href. This is what hits >99%
+         of the time.
+      2. **Browserless + Haiku Vision** (fallback) — render a Zillow
+         or Redfin search page in stealth Chrome, run Haiku Vision over
+         the screenshot. Used when Apify says "no result" — covers
+         cases where Realtor doesn't have the property indexed but
+         Zillow / Redfin do.
+
+    On total failure, stashes the last rendered screenshot to Storage
+    with a short-TTL signed URL so the user can see what went wrong."""
     import re
     import time
     from uuid import uuid4
 
-    from app.services import browserless
+    from app.services import apify, browserless
     from app.services.listing import parse_listing_image
 
     address = payload.address.strip()
 
+    # Tier 1: Apify Realtor actor. Cheapest, fastest, most reliable.
+    if apify.is_configured():
+        item = apify.lookup_property(address)
+        if item:
+            mapped = apify.to_listing_shape(item)
+            if any(
+                mapped.get(k) is not None
+                for k in ("list_price", "beds", "baths", "sqft")
+            ):
+                mapped.setdefault("listing_url", "")
+                mapped["source"] = "apify"
+                return ParseListingOut(**mapped)
+            log.info("apify returned item but no extractable fields for %s", address[:60])
+
+    # Tier 2: Browserless render + Haiku Vision.
     if not browserless.is_configured():
+        # Apify already tried (or wasn't configured) and Browserless
+        # isn't either — nothing more we can do.
         return ParseListingOut(
             listing_url="",
-            source="not_configured",
+            source="not_configured" if not apify.is_configured() else "render_failed",
         )
 
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", address).strip("-")
@@ -268,9 +292,7 @@ def auto_fill_listing(
             data.get("source"),
         )
 
-    # Every candidate either failed to render or rendered without
-    # extractable fields. Stash the most recent screenshot to Storage
-    # under a short-TTL signed URL so the user can see what we saw.
+    # Both tiers failed. Stash last screenshot for diagnosis.
     debug_url: str | None = None
     if last_image_bytes is not None:
         try:
