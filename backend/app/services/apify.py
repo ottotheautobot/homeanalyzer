@@ -21,20 +21,57 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
-_ACTOR = "kawsar~realtor-property-details-cheap"
-_BASE = f"https://api.apify.com/v2/acts/{_ACTOR}/run-sync-get-dataset-items"
+_REALTOR_ACTOR = "kawsar~realtor-property-details-cheap"
+_ZILLOW_ACTOR = "one-api~zillow-scrape-address-url-zpid"
+
+_REALTOR_BASE = f"https://api.apify.com/v2/acts/{_REALTOR_ACTOR}/run-sync-get-dataset-items"
+_ZILLOW_BASE = f"https://api.apify.com/v2/acts/{_ZILLOW_ACTOR}/run-sync-get-dataset-items"
 
 
 def is_configured() -> bool:
     return bool(settings.apify_api_token)
 
 
-def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | None:
-    """Look up a single address via the Realtor actor. Returns the
-    first dataset item (a dict with beds, baths, sqft, listPrice, etc.)
-    or None on any failure."""
+def _post_actor(url: str, body: dict, timeout: float = 60.0) -> list[dict] | None:
+    """Shared POST + JSON-parse logic for run-sync-get-dataset-items.
+    Returns a list of dataset items, or None on any failure."""
     if not settings.apify_api_token:
-        log.info("apify: not configured, skipping lookup")
+        return None
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
+            r = client.post(
+                url,
+                params={"token": settings.apify_api_token},
+                json=body,
+            )
+    except Exception:
+        log.exception("apify request failed url=%s", url)
+        return None
+    if r.status_code != 200:
+        log.warning(
+            "apify non-200 status=%s url=%s body=%s",
+            r.status_code,
+            url,
+            r.text[:200],
+        )
+        return None
+    try:
+        items = r.json()
+    except Exception:
+        log.exception("apify response not JSON url=%s", url)
+        return None
+    if not isinstance(items, list):
+        return None
+    return items
+
+
+def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | None:
+    """Realtor.com path. Cheapest ($0.001/result) and cleanest data
+    when the property is currently or recently listed. Returns None
+    when Realtor doesn't have the property indexed (off-market homes
+    that have never been listed often miss here)."""
+    if not settings.apify_api_token:
+        log.info("apify: not configured, skipping realtor lookup")
         return None
     if not address.strip():
         return None
@@ -46,42 +83,16 @@ def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | Non
             "apifyProxyCountry": "US",
         },
     }
-
-    try:
-        with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
-            r = client.post(
-                _BASE,
-                params={"token": settings.apify_api_token},
-                json=body,
-            )
-    except Exception:
-        log.exception("apify lookup request failed for %s", address[:80])
-        return None
-
-    if r.status_code != 200:
-        log.warning(
-            "apify non-200 status=%s body=%s for %s",
-            r.status_code,
-            r.text[:200],
-            address[:80],
-        )
-        return None
-
-    try:
-        items = r.json()
-    except Exception:
-        log.exception("apify response not JSON for %s", address[:80])
-        return None
-
-    if not isinstance(items, list) or not items:
-        log.info("apify returned no items for %s", address[:80])
+    items = _post_actor(_REALTOR_BASE, body, timeout=timeout)
+    if not items:
+        log.info("apify realtor returned no items for %s", address[:80])
         return None
 
     first = items[0]
     if not isinstance(first, dict):
         return None
     log.info(
-        "apify lookup ok address=%s beds=%s baths=%s sqft=%s price=%s",
+        "apify realtor lookup ok address=%s beds=%s baths=%s sqft=%s price=%s",
         address[:60],
         first.get("beds"),
         first.get("baths"),
@@ -89,6 +100,128 @@ def lookup_property(address: str, timeout: float = 60.0) -> dict[str, Any] | Non
         first.get("listPrice"),
     )
     return first
+
+
+def lookup_zillow(address: str, timeout: float = 60.0) -> dict[str, Any] | None:
+    """Zillow path via Apify's address/url/zpid actor ($0.002/result).
+    Zillow has Zestimate data for ~110M US homes including off-market
+    properties that Realtor's listing index misses, so this is the
+    right fallback when the Realtor lookup returns nothing."""
+    if not settings.apify_api_token:
+        log.info("apify: not configured, skipping zillow lookup")
+        return None
+    if not address.strip():
+        return None
+
+    body = {
+        "scrape_type": "property_addresses",
+        "multiple_input_box": address.strip(),
+    }
+    items = _post_actor(_ZILLOW_BASE, body, timeout=timeout)
+    if not items:
+        log.info("apify zillow returned no items for %s", address[:80])
+        return None
+
+    first = items[0]
+    if not isinstance(first, dict):
+        return None
+    log.info(
+        "apify zillow lookup ok address=%s keys=%s",
+        address[:60],
+        list(first.keys())[:20],
+    )
+    return first
+
+
+def _intish(v: Any) -> int | None:
+    if v is None:
+        return None
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _floatish(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def to_listing_shape_zillow(item: dict[str, Any]) -> dict[str, Any]:
+    """Map a Zillow actor result to our internal ListingData shape.
+    Zillow's field names differ from Realtor's — beds vs bedrooms,
+    sqft vs livingArea, etc. Prefer the asking price; fall back to
+    Zestimate when no asking price (off-market homes)."""
+    out: dict[str, Any] = {}
+
+    # Address — assemble from parts.
+    parts = [
+        item.get("streetAddress") or item.get("address"),
+        item.get("city") or item.get("addressCity"),
+        item.get("state") or item.get("addressState"),
+        item.get("zipcode") or item.get("addressZipcode"),
+    ]
+    addr_str = ", ".join(p for p in parts if isinstance(p, str) and p)
+    if addr_str:
+        out["address"] = addr_str
+
+    # Beds / baths / sqft — try multiple field names.
+    beds = _intish(item.get("bedrooms") or item.get("beds"))
+    if beds is not None:
+        out["beds"] = beds
+    baths = _floatish(item.get("bathrooms") or item.get("baths"))
+    if baths is not None:
+        out["baths"] = baths
+    sqft = _intish(
+        item.get("livingArea") or item.get("area") or item.get("sqft")
+    )
+    if sqft is not None:
+        out["sqft"] = sqft
+
+    # Price — prefer asking, fall back to Zestimate. Strip $ and commas
+    # if it came through as a string.
+    raw_price = (
+        item.get("price")
+        or item.get("listPrice")
+        or item.get("unformattedPrice")
+        or item.get("zestimate")
+    )
+    if isinstance(raw_price, str):
+        raw_price = raw_price.replace("$", "").replace(",", "").strip()
+    price = _intish(raw_price)
+    if price is not None:
+        out["list_price"] = price
+
+    # price_kind — Zillow's homeStatus tells us. Common values:
+    # FOR_SALE, FOR_RENT, SOLD, OFF_MARKET, COMING_SOON, PENDING.
+    status = item.get("homeStatus") or item.get("status")
+    if isinstance(status, str):
+        s = status.upper()
+        if "RENT" in s:
+            out["price_kind"] = "rent"
+        else:
+            # Default to "sale" for SOLD / OFF_MARKET / FOR_SALE / etc.
+            # — Zestimate is a sale estimate, not a rent estimate.
+            out["price_kind"] = "sale"
+
+    # Listing URL — useful as a back-link.
+    href = item.get("detailUrl") or item.get("hdpUrl") or item.get("url")
+    if isinstance(href, str) and href:
+        if href.startswith("/"):
+            href = f"https://www.zillow.com{href}"
+        out["listing_url"] = href
+
+    # Photo — actor sometimes returns a CDN URL we can use as the
+    # curb-appeal photo placeholder.
+    photo = item.get("imgSrc") or item.get("hiResImageLink")
+    if isinstance(photo, str) and photo:
+        out["photo_url"] = photo
+
+    return out
 
 
 def to_listing_shape(item: dict[str, Any]) -> dict[str, Any]:
@@ -108,23 +241,8 @@ def to_listing_shape(item: dict[str, Any]) -> dict[str, Any]:
         out["address"] = addr_str
 
     # Numeric fields — coerce defensively, the actor occasionally
-    # returns strings or null.
-    def _intish(v: Any) -> int | None:
-        if v is None:
-            return None
-        try:
-            return int(float(v))
-        except (TypeError, ValueError):
-            return None
-
-    def _floatish(v: Any) -> float | None:
-        if v is None:
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
+    # returns strings or null. Helpers shared with the Zillow mapper
+    # at module level.
     price = _intish(item.get("listPrice"))
     if price is not None:
         out["list_price"] = price
