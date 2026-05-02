@@ -30,6 +30,30 @@ def is_configured() -> bool:
     return bool(settings.mapbox_api_token)
 
 
+def _compose_address(props: dict) -> str:
+    """Build a `street, city, ST zip` string from the v6 `context` block.
+
+    Why not just use `full_address`: that ships full state names
+    ("South Carolina") + ", United States". Realtor's Apify actor
+    silently returns a no-match record for those — only the 2-letter
+    state form lands a real listing. So we rebuild from `context` and
+    use `region_code` over `region.name`."""
+    ctx = props.get("context") or {}
+    street = (ctx.get("address") or {}).get("name") or props.get("name") or ""
+    place = (ctx.get("place") or {}).get("name") or ""
+    region_code = (ctx.get("region") or {}).get("region_code") or ""
+    postcode = (ctx.get("postcode") or {}).get("name") or ""
+
+    if street and place and region_code:
+        tail = f"{region_code} {postcode}".strip()
+        return f"{street}, {place}, {tail}".strip().rstrip(",")
+    # Place-only matches (e.g. "Columbia, South Carolina") — return what we have.
+    if place and region_code:
+        return f"{place}, {region_code}".strip()
+    # Last resort — use whatever Mapbox formatted (still better than nothing).
+    return props.get("full_address") or props.get("place_formatted") or ""
+
+
 # -- Geocoding -----------------------------------------------------------
 
 
@@ -75,11 +99,7 @@ def autocomplete(query: str, limit: int = 5) -> list[dict]:
         coords = (f.get("geometry") or {}).get("coordinates") or []
         if len(coords) < 2:
             continue
-        # v6 ships a clean human-readable string in `full_address`.
-        address = props.get("full_address") or props.get("place_formatted")
-        if not address:
-            # Fall back to assembling from context blocks if needed.
-            address = props.get("name") or ""
+        address = _compose_address(props)
         if not address:
             continue
         out.append(
