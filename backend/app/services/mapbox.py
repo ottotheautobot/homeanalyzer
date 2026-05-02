@@ -140,13 +140,27 @@ def matrix(
 
     Mapbox cap: 25 total coords per request (sources + destinations
     combined). We bail rather than chunk for now — discovery-phase
-    users won't have 25+ houses or saved locations."""
+    users won't have 25+ houses or saved locations.
+
+    Mapbox ALSO requires the matrix to have ≥2 cells (1×1 returns
+    422 InvalidInput). If we'd be making a 1×1 request — common when
+    a user has just one saved location — we duplicate the destination
+    so the request is 1×2, then trim the result to 1×1 before
+    returning."""
     if not settings.mapbox_api_token:
         return None
     if not sources or not destinations:
         return None
 
-    coords = sources + destinations
+    # Pad to clear Mapbox's >=2-cells rule. We always have ≥1 source
+    # (the house) and ≥1 destination (a saved location); the only
+    # problem case is exactly 1×1.
+    pad_destination = len(sources) == 1 and len(destinations) == 1
+    effective_destinations = (
+        destinations + [destinations[-1]] if pad_destination else destinations
+    )
+
+    coords = sources + effective_destinations
     if len(coords) > 25:
         log.warning(
             "mapbox matrix: %d coords exceeds 25 cap; skipping",
@@ -156,7 +170,9 @@ def matrix(
 
     coord_str = ";".join(f"{lng},{lat}" for lat, lng in coords)
     src_idxs = ";".join(str(i) for i in range(len(sources)))
-    dst_idxs = ";".join(str(i) for i in range(len(sources), len(coords)))
+    dst_idxs = ";".join(
+        str(i) for i in range(len(sources), len(coords))
+    )
 
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0)) as client:
@@ -169,7 +185,13 @@ def matrix(
                     "access_token": settings.mapbox_api_token,
                 },
             )
-        r.raise_for_status()
+        if r.status_code != 200:
+            log.warning(
+                "mapbox matrix non-200 status=%s body=%s",
+                r.status_code,
+                r.text[:300],
+            )
+            return None
         data = r.json()
     except Exception:
         log.exception("mapbox matrix request failed")
@@ -179,4 +201,14 @@ def matrix(
         log.warning("mapbox matrix non-Ok: %s", data.get("code"))
         return None
 
-    return data.get("durations"), data.get("distances")
+    durations = data.get("durations") or []
+    distances = data.get("distances") or []
+
+    # If we padded with a duplicate destination, trim each row back to
+    # the original length so the returned matrix matches what the
+    # caller asked for.
+    if pad_destination:
+        durations = [row[:1] for row in durations]
+        distances = [row[:1] for row in distances]
+
+    return durations, distances
