@@ -124,7 +124,13 @@ async function reverseGeocode(
   }
 }
 
-export function NewHouseForm({ tourId }: { tourId: string }) {
+export function NewHouseForm({
+  tourId,
+  onSubmitted,
+}: {
+  tourId: string;
+  onSubmitted?: () => void;
+}) {
   const router = useRouter();
   const [form, setForm] = useState<Form>(emptyForm);
   const [photo, setPhoto] = useState<File | null>(null);
@@ -316,6 +322,7 @@ export function NewHouseForm({ tourId }: { tourId: string }) {
       lastTriedAddress.current = null;
       if (photoRef.current) photoRef.current.value = "";
       router.refresh();
+      onSubmitted?.();
     },
   });
 
