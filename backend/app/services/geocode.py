@@ -85,6 +85,148 @@ def _is_precise_match(item: dict) -> bool:
 _ORS_AUTOCOMPLETE_URL = "https://api.openrouteservice.org/geocode/autocomplete"
 _PHOTON_URL = "https://photon.komoot.io/api/"
 
+# Strip these street-type abbreviations / suffix words when comparing
+# the matched street against the user's query — "Cir" vs "Circle",
+# "St" vs "Street", etc. shouldn't sink a synthesis decision.
+_STREET_TYPES = re.compile(
+    r"\b("
+    r"st(reet)?|ave(nue)?|blvd|boulevard|rd|road|dr(ive)?|ln|lane|"
+    r"ct|court|cir(cle)?|way|pl(ace)?|ter(race)?|pkwy|parkway|"
+    r"hwy|highway|trl|trail|aly|alley|sq(uare)?|loop|crk|creek"
+    r")\b\.?",
+    re.IGNORECASE,
+)
+
+# House-number prefix at the start of a query: "310 Aiken Hunt Cir...".
+_HOUSE_NUMBER_PREFIX = re.compile(r"^\s*(\d{1,6})\s+(\S.*)")
+
+# 5-digit ZIP at the start, end, or after the last comma in an address.
+_ZIP_RE = re.compile(r"\b(\d{5})(?:-\d{4})?\b")
+
+# Process-local cache for ZIP→city/state lookups so repeated synthesis
+# calls for the same ZIP don't burn the rate limit.
+_ZIP_CACHE: dict[str, tuple[str, str] | None] = {}
+
+
+def _city_state_for_zip(zip_code: str) -> tuple[str, str] | None:
+    """Resolve a US ZIP to (city, state-abbr) via api.zippopotam.us.
+    Free, no key, ~50ms. None on any failure. Cached per process so a
+    typing user doesn't re-hit on every keystroke."""
+    if zip_code in _ZIP_CACHE:
+        return _ZIP_CACHE[zip_code]
+    try:
+        r = httpx.get(
+            f"https://api.zippopotam.us/us/{zip_code}",
+            timeout=4.0,
+        )
+        if r.status_code != 200:
+            _ZIP_CACHE[zip_code] = None
+            return None
+        data = r.json()
+        place = (data.get("places") or [{}])[0]
+        city = place.get("place name")
+        state = place.get("state abbreviation")
+        if city and state:
+            _ZIP_CACHE[zip_code] = (city, state)
+            return (city, state)
+    except Exception:
+        log.exception("zippopotam lookup failed for %s", zip_code)
+    _ZIP_CACHE[zip_code] = None
+    return None
+
+
+def _normalize_street_words(s: str) -> set[str]:
+    """Lowercase + drop street-type abbreviations + extract significant
+    word tokens (>=3 chars) for fuzzy "is this the same street" check."""
+    s = s.lower()
+    s = _STREET_TYPES.sub(" ", s)
+    return {w for w in re.findall(r"[a-z]+", s) if len(w) >= 3}
+
+
+def _maybe_synthesize_house_addresses(
+    query: str, results: list[dict]
+) -> list[dict]:
+    """When the user typed a leading house number but every tier only
+    found the street, prepend the number to the matched address as a
+    "best guess" suggestion.
+
+    Why: free address indexes (Pelias' OpenAddresses, Photon's OSM,
+    Nominatim's OSM) have spotty US house-number coverage outside
+    major cities. The user types "310 Aiken Hunt Cir 29223", we get
+    back "Aiken Hunt Circle, SC, 29223" with no "310" — the user is
+    stuck. Synthesizing "310 Aiken Hunt Circle, SC, 29223" gives
+    them something to pick; the downstream auto-fill (Apify Realtor
+    /Zillow) confirms with the canonical address.
+
+    Safety: only synthesize when at least one significant word from
+    the matched street appears in the user's query. So a "310 Smith"
+    query that returned "Aiken Hunt Circle" wouldn't get a misleading
+    "310 Aiken Hunt Circle" suggestion."""
+    m = _HOUSE_NUMBER_PREFIX.match(query)
+    if not m:
+        return results
+    house_num = m.group(1)
+    rest_query_words = _normalize_street_words(m.group(2))
+    if not rest_query_words:
+        return results
+
+    synthesized: list[dict] = []
+    seen = {r["address"].lstrip().lower() for r in results}
+
+    for r in results:
+        addr = r["address"]
+        first_token = addr.lstrip().split(",")[0].strip().split()[:1]
+        # Skip if the matched address already starts with a house number.
+        if first_token and first_token[0].isdigit():
+            continue
+        # Verify the street name overlaps with the user's query — guards
+        # against synthesizing "310 Random Street" for an unrelated match.
+        street_part = addr.split(",")[0]
+        match_words = _normalize_street_words(street_part)
+        if not (match_words & rest_query_words):
+            continue
+        # Apify Realtor needs a city for a precise match. If we have a
+        # ZIP (in either the user's query or the match), look up the
+        # ZIP's primary city and rebuild the address as
+        # `<num> <street>, <city>, <state> <zip>`. Otherwise fall back
+        # to just prepending the house number to the matched address.
+        zip_match = _ZIP_RE.search(query) or _ZIP_RE.search(addr)
+        cs = _city_state_for_zip(zip_match.group(1)) if zip_match else None
+        if cs:
+            street_only = addr.split(",")[0].strip()
+            city, state_abbr = cs
+            synth_addr = (
+                f"{house_num} {street_only}, {city}, {state_abbr} {zip_match.group(1)}"
+            )
+        else:
+            synth_addr = f"{house_num} {addr}"
+        if synth_addr.lstrip().lower() in seen:
+            continue
+        synthesized.append(
+            {"address": synth_addr, "lat": r["lat"], "lng": r["lng"]}
+        )
+        seen.add(synth_addr.lstrip().lower())
+
+    if not synthesized:
+        return results
+    # Suppress synthesis when an existing result already has BOTH the
+    # right house number AND street-name overlap with the query (e.g.,
+    # Pelias returned "8200 Peters Rd, Plantation FL"). Don't suppress
+    # when the existing numbered matches are unrelated streets that
+    # happen to share the house number (e.g., "310 Pasaje Los…").
+    for r in results:
+        first_word = r["address"].lstrip().split(",")[0].strip().split()
+        if not first_word or not first_word[0].isdigit():
+            continue
+        if first_word[0] != house_num:
+            continue
+        existing_street_words = _normalize_street_words(
+            r["address"].split(",")[0]
+        )
+        if existing_street_words & rest_query_words:
+            return results
+    return synthesized + results
+
 
 class GeocodeSuggestion(dict):
     """Lightweight dict with .address / .lat / .lng for the autocomplete
@@ -138,7 +280,7 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
                     continue
                 out.append({"address": label, "lat": float(lat), "lng": float(lng)})
             if out:
-                return out
+                return _maybe_synthesize_house_addresses(query, out)
         except Exception:
             log.exception("ORS autocomplete failed; falling back to Photon")
 
@@ -197,7 +339,7 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
                 continue
             out.append({"address": label, "lat": float(lat), "lng": float(lng)})
         if out:
-            return out
+            return _maybe_synthesize_house_addresses(query, out)
     except Exception:
         log.exception("Photon autocomplete failed")
 
@@ -239,7 +381,7 @@ def autocomplete_addresses(query: str, limit: int = 5) -> list[dict]:
     except Exception:
         log.exception("Nominatim autocomplete failed")
 
-    return out
+    return _maybe_synthesize_house_addresses(query, out)
 
 
 def geocode_address(address: str, timeout: float = 8.0) -> Tuple[float, float] | None:
