@@ -13,6 +13,7 @@ typically resolve in 5-15 seconds."""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -261,9 +262,31 @@ def to_listing_shape_zillow(item: dict[str, Any]) -> dict[str, Any]:
     # shot, so first-photo doubles as the curb-appeal pick.
     photo = _first_photo_url(item)
     if photo:
-        out["photo_url"] = photo
+        out["photo_url"] = _upgrade_photo_url(photo)
 
     return out
+
+
+# Realtor's rdcpix CDN serves multiple sizes; the actor returns the
+# `s.jpg` thumbnail (~5KB, grainy when rendered as the curb-appeal
+# hero). The CDN also exposes an on-demand resize endpoint we can
+# rewrite to: `od-w{W}_h{H}.webp` ≈ 180KB at 1024×768. Bigger
+# (2048×1536) is overkill — the house page renders at ~600-800px.
+_RDCPIX_SIZE_RE = re.compile(
+    r"[a-z]{1,3}\.(jpg|jpeg|png|webp)$",
+    re.IGNORECASE,
+)
+
+
+def _upgrade_photo_url(url: str) -> str:
+    """Rewrite a thumbnail-sized listing photo URL to a hero-quality
+    variant when the CDN supports on-demand resizing. No-op for any
+    CDN we haven't characterized."""
+    if not isinstance(url, str) or not url:
+        return url
+    if "rdcpix.com" in url:
+        return _RDCPIX_SIZE_RE.sub("od-w1024_h768.webp", url)
+    return url
 
 
 _EXTERIOR_TAG_TOKENS = (
@@ -433,6 +456,6 @@ def to_listing_shape(item: dict[str, Any]) -> dict[str, Any]:
 
     photo = _first_photo_url(item)
     if photo:
-        out["photo_url"] = photo
+        out["photo_url"] = _upgrade_photo_url(photo)
 
     return out
