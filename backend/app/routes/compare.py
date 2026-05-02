@@ -63,16 +63,21 @@ def compare(
             f"Not a participant on tour(s) for: {', '.join(not_permitted)}",
         )
 
-    observations_by_house: dict[str, list[dict]] = {}
-    for h in houses:
-        obs = (
-            sb.table("observations")
-            .select("room, category, content, severity")
-            .eq("house_id", h["id"])
-            .order("created_at")
-            .execute()
+    # Single fan-out query, then group by house_id. Replaces a
+    # per-house SELECT loop that scaled linearly with comparison size.
+    house_ids = [h["id"] for h in houses]
+    obs_res = (
+        sb.table("observations")
+        .select("house_id, room, category, content, severity, created_at")
+        .in_("house_id", house_ids)
+        .order("created_at")
+        .execute()
+    )
+    observations_by_house: dict[str, list[dict]] = {hid: [] for hid in house_ids}
+    for o in obs_res.data or []:
+        observations_by_house[o["house_id"]].append(
+            {k: o[k] for k in ("room", "category", "content", "severity")}
         )
-        observations_by_house[h["id"]] = obs.data or []
 
     try:
         answer = compare_houses(houses, observations_by_house, body.query)
