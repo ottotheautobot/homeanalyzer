@@ -60,14 +60,16 @@ Optional. The "Auto-fill from listing" button on the new-house form looks up bed
 | **Primary: Apify Realtor actor** | API token | Railway env `APIFY_API_TOKEN` | $0.001/lookup, $5/mo free credits ≈ 5k free lookups, no card required for free tier. We hit the `kawsar/realtor-property-details-cheap` actor's `run-sync-get-dataset-items` endpoint with `searchQueries: [address]`. Apify maintains the anti-bot. Sign up at apify.com. |
 | **Fallback: Browserless + Haiku Vision** | API token | Railway env `BROWSERLESS_API_TOKEN` | Used when Apify finds nothing (rare — Realtor's coverage is broad). Renders Zillow / Redfin search pages in stealth Chrome and runs Haiku Vision over the screenshot. $5/mo for 1k pages or pay-per-use ~$0.01/page. Sign up at browserless.io. Optional — if unset, auto-fill returns "no result" when Apify misses. |
 
-## Routing API (commute distances on /map)
+## Mapbox (geocoding + autocomplete + routing)
 
-Optional. Either provider gives the saved-locations feature real drive time + distance. With neither configured, the feature falls back to as-the-crow-flies haversine miles with no time estimate — still functional, just less precise. Backend tries ORS first, then Mapbox, then haversine.
+Single vendor, single env var. Powers:
+- Address autocomplete in every address input (new-house form, saved locations, quick tour).
+- Forward geocoding when a user submits an address without picking from autocomplete.
+- House → saved-location commute distances + drive time on `/map`.
 
-| Provider | Credential | Where | Notes |
-|---|---|---|---|
-| OpenRouteService | API token | Railway env `OPENROUTESERVICE_API_TOKEN` | Free tier: 2000 matrix requests/day, no card. Signup at openrouteservice.org/dev → "Sign up". Preferred — easier signup than Mapbox. |
-| Mapbox | API token | Railway env `MAPBOX_API_TOKEN` | Free tier: 100k matrix requests/month, each up to 25×25 origins-destinations. Generate at account.mapbox.com → Tokens. A default public token (`pk.…`) is fine; we only use the Directions Matrix scope. (Their signup form sometimes hits captcha glitches; ORS is the workaround.) |
+| Credential | Where | Notes |
+|---|---|---|
+| API token | Railway env `MAPBOX_API_TOKEN` | Free tier: ~100k requests/month combined across geocoding + matrix. A default public token (`pk.…`) works. Generate at account.mapbox.com → Tokens. Empty = autocomplete returns nothing and commute distances degrade to as-the-crow-flies haversine miles (still functional, just less precise). |
 
 ## Resend (transactional email)
 

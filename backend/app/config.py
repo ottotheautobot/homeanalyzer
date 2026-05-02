@@ -59,17 +59,11 @@ class Settings(BaseSettings):
     modal_token_id: str = ""
     modal_token_secret: str = ""
 
-    # Routing API for commute distances on the saved-locations / map
-    # feature. EITHER may be configured; we try ORS first, then Mapbox,
-    # then fall back to as-the-crow-flies haversine. Empty for both =
-    # haversine-only (still functional, just no drive time).
-    #
-    # OpenRouteService — free tier 2000 reqs/day, no card. Signup at
-    # openrouteservice.org/dev/#/signup
-    openrouteservice_api_token: str = ""
-    # Mapbox Directions Matrix — free tier 100k req/mo. Signup at
-    # account.mapbox.com (sometimes hits captcha glitches; ORS is the
-    # workaround).
+    # Mapbox — single vendor for forward geocoding, autocomplete, and
+    # directions matrix (commute distances). Free tier covers ~100k
+    # requests/mo across both APIs. Signup at account.mapbox.com.
+    # Empty = autocomplete falls back to "no suggestions" and commute
+    # distances degrade to as-the-crow-flies haversine miles.
     mapbox_api_token: str = ""
 
     # Browserless — managed headless Chrome. Fallback for the

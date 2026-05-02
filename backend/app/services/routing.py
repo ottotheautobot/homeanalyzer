@@ -1,14 +1,16 @@
 """Distances + commute times from candidate houses to a user's saved
 locations (work, school, gym, etc.).
 
-Three-tier strategy, tried in order:
-  1. **OpenRouteService Matrix** — when OPENROUTESERVICE_API_TOKEN is
-     set. Free tier 2000 req/day, no card. Real drive time + distance.
-  2. **Mapbox Directions Matrix** — when MAPBOX_API_TOKEN is set. Free
-     tier 100k req/mo. Real drive time + distance.
-  3. **Haversine** — always available fallback. As-the-crow-flies miles,
-     no drive time. Good enough to answer "is this even close to my
-     office?" 80% of the time.
+Two-tier strategy, tried in order:
+  1. **Mapbox Directions Matrix** — when MAPBOX_API_TOKEN is set.
+     Free tier covers our discovery-phase volume; real drive time
+     + distance.
+  2. **Haversine** — always-available fallback. As-the-crow-flies
+     miles, no drive time. Good enough to answer "is this even close
+     to my office?" 80% of the time.
+
+(v2.8 dropped OpenRouteService entirely — Mapbox now handles both
+geocoding and routing, so we shed one vendor + one env var.)
 
 Cache lives on `houses.commute_distances` JSONB. Invalidated when:
   - the user's saved_locations array changes (recompute all that user's
@@ -23,15 +25,11 @@ import logging
 import math
 from typing import Iterable, TypedDict
 
-import httpx
-
-from app.config import settings
 from app.db.supabase import supabase
+from app.services import mapbox
 
 log = logging.getLogger(__name__)
 
-_MAPBOX_MATRIX_BASE = "https://api.mapbox.com/directions-matrix/v1/mapbox/driving"
-_ORS_MATRIX_URL = "https://api.openrouteservice.org/v2/matrix/driving-car"
 _METERS_PER_MILE = 1609.344
 
 
@@ -64,107 +62,8 @@ def _haversine_miles(a_lat: float, a_lng: float, b_lat: float, b_lng: float) -> 
     return R_MILES * c
 
 
-def _ors_matrix(
-    sources: list[tuple[float, float]],
-    destinations: list[tuple[float, float]],
-) -> tuple[list[list[float | None]], list[list[float | None]]] | None:
-    """Call OpenRouteService Matrix. Returns (durations_seconds,
-    distances_meters) matrices indexed [source_idx][destination_idx],
-    or None on any failure (so caller can fall back to the next
-    provider).
-
-    Free tier: 2000 req/day, max 3500 source*destination cells per
-    request. We send all coords in one `locations` list and select
-    sources/destinations by index, matching the Mapbox client's shape."""
-    if not settings.openrouteservice_api_token:
-        return None
-    if not sources or not destinations:
-        return None
-
-    locations = [[lng, lat] for lat, lng in sources + destinations]
-    src_idx = list(range(len(sources)))
-    dst_idx = list(range(len(sources), len(locations)))
-    body = {
-        "locations": locations,
-        "sources": src_idx,
-        "destinations": dst_idx,
-        "metrics": ["duration", "distance"],
-        "units": "m",
-    }
-
-    try:
-        r = httpx.post(
-            _ORS_MATRIX_URL,
-            json=body,
-            headers={
-                "Authorization": settings.openrouteservice_api_token,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            timeout=15.0,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        log.exception("ORS matrix request failed")
-        return None
-
-    return data.get("durations"), data.get("distances")
-
-
-def _mapbox_matrix(
-    sources: list[tuple[float, float]],
-    destinations: list[tuple[float, float]],
-) -> tuple[list[list[float | None]], list[list[float | None]]] | None:
-    """Call Mapbox Directions Matrix. Returns (durations_seconds,
-    distances_meters) matrices indexed [source_idx][destination_idx],
-    or None on any failure (so caller can fall back to haversine).
-
-    Indexing convention: every coordinate goes into the URL path; the
-    `sources` and `destinations` query params select which subset of
-    indices act as origins vs destinations for the matrix."""
-    if not settings.mapbox_api_token:
-        return None
-    if not sources or not destinations:
-        return None
-
-    coords = sources + destinations
-    if len(coords) > 25:
-        # Mapbox cap. Fall back rather than try to chunk for now —
-        # discovery-phase users won't have 25+ houses or saved
-        # locations. Revisit when usage demands it.
-        log.warning(
-            "mapbox matrix: %d coords exceeds 25 cap; falling back",
-            len(coords),
-        )
-        return None
-
-    coord_str = ";".join(f"{lng},{lat}" for lat, lng in coords)
-    src_idxs = ";".join(str(i) for i in range(len(sources)))
-    dst_idxs = ";".join(str(i) for i in range(len(sources), len(coords)))
-
-    try:
-        r = httpx.get(
-            f"{_MAPBOX_MATRIX_BASE}/{coord_str}",
-            params={
-                "annotations": "duration,distance",
-                "sources": src_idxs,
-                "destinations": dst_idxs,
-                "access_token": settings.mapbox_api_token,
-            },
-            timeout=15.0,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        log.exception("mapbox matrix request failed")
-        return None
-
-    if data.get("code") != "Ok":
-        log.warning("mapbox matrix non-Ok: %s", data.get("code"))
-        return None
-
-    return data.get("durations"), data.get("distances")
+# Mapbox matrix moved to services/mapbox.py; this module just calls
+# mapbox.matrix() and falls back to haversine when needed.
 
 
 def compute_distances_for_house(
@@ -189,13 +88,11 @@ def compute_distances_for_house(
     house_origin = [(house_lat, house_lng)]
     saved_dests = [(s["lat"], s["lng"]) for s in locs_with_coords]
 
-    # Try ORS first (preferred — free, no card), then Mapbox, then
-    # haversine. Each provider returns None on misconfig or failure.
-    for provider_call in (_ors_matrix, _mapbox_matrix):
-        result = provider_call(sources=house_origin, destinations=saved_dests)
-        if result is not None:
-            durations, distances = result
-            break
+    # Try Mapbox first (real drive time/distance); haversine fallback
+    # below if Mapbox is unconfigured or the request fails.
+    result = mapbox.matrix(sources=house_origin, destinations=saved_dests)
+    if result is not None:
+        durations, distances = result
 
     for i, loc in enumerate(locs_with_coords):
         if durations is not None and distances is not None:
