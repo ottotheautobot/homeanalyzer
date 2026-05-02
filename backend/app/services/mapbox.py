@@ -40,7 +40,15 @@ def _compose_address(props: dict) -> str:
     use `region_code` over `region.name`."""
     ctx = props.get("context") or {}
     street = (ctx.get("address") or {}).get("name") or props.get("name") or ""
-    place = (ctx.get("place") or {}).get("name") or ""
+    # NYC boroughs (and similar): Mapbox puts the borough in `locality`
+    # and the parent metro in `place` — e.g. Staten Island has
+    # locality="Staten Island", place="New York". Realtor / Zillow
+    # lookups need the borough form, so prefer locality when present.
+    place = (
+        (ctx.get("locality") or {}).get("name")
+        or (ctx.get("place") or {}).get("name")
+        or ""
+    )
     region_code = (ctx.get("region") or {}).get("region_code") or ""
     postcode = (ctx.get("postcode") or {}).get("name") or ""
 
@@ -80,10 +88,14 @@ def autocomplete(query: str, limit: int = 5) -> list[dict]:
                     "limit": min(limit, 10),
                     "country": "us",
                     "autocomplete": "true",
-                    # Address types we care about for the form: full
-                    # street addresses + named places (e.g. "Whole
-                    # Foods, Plantation FL" can be a saved location).
-                    "types": "address,street,place,locality,postcode",
+                    # Only `address` (full house-number-included matches)
+                    # and `place` (city-level fallback for saved
+                    # locations). `street` returns matches *without* a
+                    # house number, which we never want — every flow
+                    # this autocomplete feeds (new house, quick tour,
+                    # saved locations) starts with the user typing the
+                    # number, so streetname-only suggestions are noise.
+                    "types": "address,place",
                     "language": "en",
                 },
             )
@@ -128,7 +140,11 @@ def geocode(address: str) -> Tuple[float, float] | None:
                     "limit": 1,
                     "country": "us",
                     "autocomplete": "false",
-                    "types": "address,street,place",
+                    # Match the autocomplete shape — refuse street-level
+                    # matches so an un-numbered query returns None rather
+                    # than silently saving street centroid coords as a
+                    # "house".
+                    "types": "address,place",
                     "language": "en",
                 },
             )
